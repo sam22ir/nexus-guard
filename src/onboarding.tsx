@@ -519,9 +519,9 @@ export function OnboardingModal({ onClose, onSave, onAddAccount, accounts, exist
 
 function OnboardShell({ title, description, onClose, children }: { title: string; description: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[12px] border border-(--line) bg-(--panel) p-6 shadow-[0_2px_8px_rgba(0,0,0,0.45)] sm:p-8"
+        className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[18px] border border-(--line) bg-(--panel) p-6 shadow-[var(--shadow-pop)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">

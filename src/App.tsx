@@ -7,9 +7,9 @@ import { accountGroupKey, blastRadiusWarningsFor, detectBlastRadius } from "./ac
 import { CENTRAL_TABLE, VOCAB, resolveOverride } from "./guard";
 import { HomeView } from "./home";
 import { agentDisplayName, projectDisplayName, type PendingLinkRequest } from "./topology";
-import { OnboardingModal, ThemeButton, initTheme, nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "./onboarding";
+import { OnboardingModal, ThemeButton, ThemeToggle, initTheme, nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "./onboarding";
 import { Button } from "@heroui/react";
-import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
+import { AppShell, Badge, Empty, Icon as NxIcon, Notice, Segmented, type NavItem, type StepState, type Tone } from "./ui";
 import "./App.css";
 
 type View = "home" | "overview" | "projects" | "agents" | "bindings" | "services" | "guard" | "activity" | "settings";
@@ -26,51 +26,30 @@ type AgentConfigEdit = { path: string; backup: string; diff: string };
 type UnmanagedMcpEntry = { source: string; name: string; kind: string };
 
 const primaryBtn =
-  "rounded-[6px] bg-[#F5F5F5] px-4 py-2 text-[13px] font-medium text-[#1A1A1A] transition-[background-color,transform,opacity] duration-200 hover:bg-[#D4D4D4] active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-[10px] bg-(--text) px-4 py-2 text-[13px] font-medium text-(--canvas) transition-[background-color,transform,opacity] duration-200 hover:opacity-85 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus) focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 const secondaryBtn =
-  "rounded-[6px] border border-[#333333] bg-[#212121] px-4 py-2 text-[13px] font-medium text-[#F5F5F5] transition-[transform,opacity] duration-200 hover:-translate-y-px hover:border-[#555555] active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-[10px] border border-(--line) bg-(--panel) px-4 py-2 text-[13px] font-medium text-(--text) transition-[transform,opacity] duration-200 hover:border-(--muted-2) active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus) focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 const smallBtn =
-  "shrink-0 rounded-[6px] border border-[#333333] bg-[#212121] px-3 py-1.5 text-[12px] font-medium text-[#F5F5F5] transition-[transform,opacity] duration-200 hover:-translate-y-px hover:border-[#555555] active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] disabled:cursor-not-allowed disabled:opacity-50";
+  "shrink-0 rounded-[10px] border border-(--line) bg-(--panel) px-3 py-1.5 text-[12px] font-medium text-(--text) transition-[transform,opacity] duration-200 hover:border-(--muted-2) active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus) disabled:cursor-not-allowed disabled:opacity-50";
 const dangerBtn =
-  "shrink-0 rounded-[6px] border border-[#5A2A27] bg-[#212121] px-3 py-1.5 text-[12px] font-medium text-[#F08A80] transition-[transform,opacity] duration-200 hover:-translate-y-px hover:bg-[#3A1E1C] active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F08A80] disabled:cursor-not-allowed disabled:opacity-50";
+  "shrink-0 rounded-[10px] border border-(--red-bg) bg-(--panel) px-3 py-1.5 text-[12px] font-medium text-(--red) transition-[transform,opacity] duration-200 hover:bg-(--red-bg) active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--red) disabled:cursor-not-allowed disabled:opacity-50";
 const ghostLink =
-  "rounded-[6px] px-2 py-1 text-[13px] font-medium text-[#A3A3A3] transition-[transform,opacity] duration-200 hover:text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]";
+  "rounded-[10px] px-2 py-1 text-[13px] font-medium text-(--muted) transition-[transform,opacity] duration-200 hover:text-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)";
 const inputClass =
-  "h-10 w-full rounded-[6px] border border-[#333333] bg-[#262626] px-3 text-[13px] text-[#F5F5F5] placeholder:text-[#737373] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] focus-visible:ring-offset-1";
+  "h-10 w-full rounded-[10px] border border-(--line) bg-(--panel) px-3 text-[13px] text-(--text) placeholder:text-(--muted-2) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus) focus-visible:ring-offset-1";
 const selectClass =
-  "h-10 w-full rounded-[6px] border border-[#333333] bg-[#262626] px-3 text-[13px] text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] focus-visible:ring-offset-1";
+  "h-10 w-full rounded-[10px] border border-(--line) bg-(--panel) px-3 text-[13px] text-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus) focus-visible:ring-offset-1";
 
 function badgeStyle(tone: string): { background: string; color: string } {
-  if (tone === "green" || tone === "allow" || tone === "connected" || tone === "success" || tone === "folder ok") return { background: "#1C2E23", color: "#6FCE97" };
-  if (tone === "yellow" || tone === "warning" || tone === "pending" || tone === "approval_required" || tone === "shared") return { background: "#332A12", color: "#E0A93E" };
-  if (tone === "red" || tone === "danger" || tone === "block" || tone === "failed" || tone === "missing") return { background: "#3A1E1C", color: "#F08A80" };
-  if (tone === "blue") return { background: "#1B2C42", color: "#7FB8E8" };
-  return { background: "#262626", color: "#A3A3A3" };
-}
-
-function Icon({ name }: { name: string }) {
-  const paths: Record<string, string> = {
-    grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
-    folder: "M3.5 6.5h6l1.7 2H20.5v9.5h-17z",
-    nodes: "M7 6.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm10 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5ZM9 9h6m-7 1.5 5.8 3.5",
-    link: "M9.5 14.5 8 16a3.2 3.2 0 0 1-4.5-4.5L6 9m8.5.5L16 8a3.2 3.2 0 0 1 4.5 4.5L18 15M8 12h8",
-    shield: "M12 3.5 19 6v5.2c0 4.2-2.8 7.4-7 9.3-4.2-1.9-7-5.1-7-9.3V6zM9.2 12l1.8 1.8 3.8-4",
-    activity: "M3.5 12h3l2-5 3.3 10 2.1-5h6.6",
-    settings: "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm0-5v2m0 13v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4",
-    plus: "M12 5v14M5 12h14",
-    arrow: "M5 12h13m-5-5 5 5-5 5",
-    home: "M4 11 12 4l8 7m-9 8v-5m-6 5H5v-7m14 7h-4v-7",
-    services: "M4 7h16v3H4zM4 14h16v3H4zM8 7v10",
-  };
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <path d={paths[name] ?? paths.grid} />
-    </svg>
-  );
+  if (tone === "green" || tone === "allow" || tone === "connected" || tone === "success" || tone === "folder ok") return { background: "var(--green-bg)", color: "var(--green)" };
+  if (tone === "yellow" || tone === "warning" || tone === "pending" || tone === "approval_required" || tone === "shared") return { background: "var(--orange-bg)", color: "var(--orange)" };
+  if (tone === "red" || tone === "danger" || tone === "block" || tone === "failed" || tone === "missing") return { background: "var(--red-bg)", color: "var(--red)" };
+  if (tone === "blue") return { background: "var(--blue-bg)", color: "var(--blue)" };
+  return { background: "var(--raised)", color: "var(--muted)" };
 }
 
 function StatusDot({ tone = "green" }: { tone?: string }) {
-  const color = tone === "green" ? "#6FCE97" : tone === "orange" || tone === "yellow" ? "#E0A93E" : tone === "red" ? "#F08A80" : tone === "blue" ? "#7FB8E8" : "#A3A3A3";
+  const color = tone === "green" ? "var(--green)" : tone === "orange" || tone === "yellow" ? "var(--orange)" : tone === "red" ? "var(--red)" : tone === "blue" ? "var(--blue)" : "var(--muted)";
   return <span aria-hidden="true" style={{ display: "inline-block", width: 7, height: 7, borderRadius: 9999, background: color, flexShrink: 0 }} />;
 }
 
@@ -847,33 +826,27 @@ function App() {
   );
 }
 
-function PageTitle({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
+/** The shell header already names the screen; this row only carries the
+ *  screen's one-line explanation and its primary actions. */
+function PageTitle({ description, action }: { eyebrow?: string; title?: string; description: string; action?: ReactNode }) {
   return (
-    <div className="flex shrink-0 flex-wrap items-end justify-between gap-4">
-      <div className="max-w-[640px]">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">{eyebrow}</p>
-        <h1 className="mt-1 text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#F5F5F5]">{title}</h1>
-        <p className="mt-2 max-w-[65ch] text-[13px] leading-[1.6] text-[#A3A3A3]">{description}</p>
-      </div>
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-4">
+      <p className="max-w-[72ch] text-[13px] leading-[1.6] text-(--muted)">{description}</p>
       {action && <div className="flex flex-wrap gap-2">{action}</div>}
     </div>
   );
 }
 
-function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return (
-    <section className={`min-h-0 rounded-[10px] border border-[#333333] bg-[#212121] p-6 transition-[transform,opacity] duration-200 sm:p-8 ${className}`}>
-      {children}
-    </section>
-  );
+function Card({ children, flush = false, className = "" }: { children: ReactNode; flush?: boolean; className?: string }) {
+  return <section className={`nx-card${flush ? " nx-card-flush" : ""} ${className}`}>{children}</section>;
 }
 
 function CardHeading({ eyebrow, title, action }: { eyebrow: string; title: string; action?: ReactNode }) {
   return (
-    <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">{eyebrow}</p>
-        <h2 className="mt-1 text-[17px] font-semibold tracking-[-0.01em] text-[#F5F5F5]">{title}</h2>
+    <div className="nx-card-head shrink-0">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="nx-eyebrow">{eyebrow}</span>
+        <h2 className="nx-card-title">{title}</h2>
       </div>
       {action}
     </div>
@@ -882,8 +855,8 @@ function CardHeading({ eyebrow, title, action }: { eyebrow: string; title: strin
 
 function Note({ children }: { children: ReactNode }) {
   return (
-    <div className="flex shrink-0 items-start gap-2.5 rounded-[8px] border border-[#333333] bg-[#1A1A1A] p-3 text-[12px] leading-[1.6] text-[#A3A3A3]">
-      <span className="mt-0.5 text-[#6FCE97]"><Icon name="shield" /></span>
+    <div className="flex shrink-0 items-start gap-2.5 rounded-[12px] bg-(--raised) p-3 text-[12px] leading-[1.6] text-(--muted)">
+      <span className="mt-0.5 text-(--muted)"><NxIcon name="shield" size={15} /></span>
       <p className="min-w-0 flex-1">{children}</p>
     </div>
   );
@@ -1007,54 +980,52 @@ function Overview({ project, projects, accounts, onView, onAddConnection, onConn
   ];
 
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
       <PageTitle
-        eyebrow="Project overview"
-        title={project.name}
         description={`${project.path} → ${project.name} · ${project.environment}`}
         action={
           <>
-            <button type="button" onClick={protectedNow ? onConnectAgent : onAddConnection} className={primaryBtn}>
+            <Button size="sm" onPress={protectedNow ? onConnectAgent : onAddConnection}>
               {protectedNow ? "Connect agent" : "Connect a service"}
-            </button>
-            <button type="button" onClick={() => onView("bindings")} className={secondaryBtn}>Bindings</button>
+            </Button>
+            <Button size="sm" variant="outline" onPress={() => onView("bindings")}>Bindings</Button>
           </>
         }
       />
 
       <Card className="shrink-0">
         <div className="flex flex-wrap items-center gap-5">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#1C2E23] text-[#6FCE97]">
-            <Icon name="shield" />
+          <span className="nx-tile" data-tone={protectedNow ? "success" : pending.length > 0 ? "info" : "warning"} style={{ width: 44, height: 44 }}>
+            <NxIcon name="shield" size={20} />
           </span>
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2 text-[12px] font-semibold">
               <StatusDot tone={protectedNow ? "green" : pending.length > 0 ? "blue" : "orange"} />
-              <span style={{ color: protectedNow ? "#6FCE97" : pending.length > 0 ? "#7FB8E8" : "#E0A93E" }}>
+              <span style={{ color: protectedNow ? "var(--green)" : pending.length > 0 ? "var(--blue)" : "var(--orange)" }}>
                 {protectedNow ? "Protected" : pending.length > 0 ? "Approval in browser" : "Setup needed"}
               </span>
             </p>
-            <h2 className="mt-1.5 text-[19px] font-semibold leading-[1.3] tracking-[-0.02em] text-[#F5F5F5]">
+            <h2 className="mt-1 text-[16px] font-semibold leading-[1.3] tracking-[-0.01em] text-(--text)">
               {protectedNow ? `Every call resolves to ${connected[0].resource ?? connected[0].target}` : pending.length > 0 ? "Finish the approval waiting in your browser" : "Connect one resource to guard this folder"}
             </h2>
-            <p className="mt-1 max-w-[65ch] text-[13px] leading-[1.6] text-[#A3A3A3]">
+            <p className="mt-1 max-w-[65ch] text-[13px] leading-[1.6] text-(--muted)">
               {protectedNow ? "Agents on this folder get this resource only. Anything else is blocked before it reaches the provider." : "Two minutes: approve in the browser, pick the project, done."}
             </p>
           </div>
-          <div className="flex min-w-[170px] flex-col gap-1 border-l border-[#333333] pl-5 text-[12px] tabular-nums text-[#A3A3A3]">
+          <div className="flex min-w-[170px] flex-col gap-1 border-l border-(--line-soft) pl-5 text-[12px] tabular-nums text-(--muted)">
             <span>Identity</span>
-            <strong className="font-semibold text-[#F5F5F5]">{diskCheck?.nexus_project_id ? "On disk" : "Unverified"}</strong>
+            <strong className="font-semibold text-(--text)">{diskCheck?.nexus_project_id ? "On disk" : "Unverified"}</strong>
             <span>Last guard call: {last ? `${decisionLabel(last.decision)} ${timeAgo(last.ts)}` : "never"}</span>
           </div>
         </div>
       </Card>
 
       {blastWarnings.length > 0 && (
-        <details className="shrink-0 rounded-[10px] border border-[#333333] bg-[#212121] px-6 py-4">
-          <summary className="cursor-pointer text-[13px] font-semibold text-[#F5F5F5]">
+        <details className="nx-card shrink-0 !py-3">
+          <summary className="cursor-pointer text-[13px] font-semibold text-(--text)">
             Shared account warning — {blastWarnings.length} login{blastWarnings.length === 1 ? "" : "s"} used by other projects
           </summary>
-          <ul className="mt-2 flex flex-col gap-1.5 text-[12px] leading-[1.6] tabular-nums text-[#A3A3A3]">
+          <ul className="mt-2 flex flex-col gap-1.5 text-[12px] leading-[1.6] tabular-nums text-(--muted)">
             {blastWarnings.map((entry) => (
               <li key={entry.accountKey}>
                 {entry.provider} · {entry.accountLabel} — also bound by {entry.projectIds.filter((id) => id !== project.id).map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") || "another project"}.
@@ -1073,14 +1044,14 @@ function Overview({ project, projects, accounts, onView, onAddConnection, onConn
             action={<button type="button" onClick={() => setDiskCheck(null)} className={ghostLink}>Dismiss</button>}
           />
           <div className="flex flex-col gap-2 text-[13px] leading-[1.6]">
-            <p className="tabular-nums text-[#F5F5F5]">On disk: <span className="text-[#A3A3A3]">{diskSummary}</span></p>
-            <p className="tabular-nums text-[#F5F5F5]">Here: <span className="text-[#A3A3A3]">{project.name} · {project.environment} · {hereSummary}</span></p>
+            <p className="tabular-nums text-(--text)">On disk: <span className="text-(--muted)">{diskSummary}</span></p>
+            <p className="tabular-nums text-(--text)">Here: <span className="text-(--muted)">{project.name} · {project.environment} · {hereSummary}</span></p>
             {diskDiffers
-              ? <p className="text-[12px] text-[#A3A3A3]">Agents opening this folder resolve the on-disk file until re-saved. Keep the disk version, or overwrite it with what is shown here.</p>
-              : <p className="text-[12px] text-[#A3A3A3]">Agents opening this folder resolve exactly what is shown here.</p>}
+              ? <p className="text-[12px] text-(--muted)">Agents opening this folder resolve the on-disk file until re-saved. Keep the disk version, or overwrite it with what is shown here.</p>
+              : <p className="text-[12px] text-(--muted)">Agents opening this folder resolve exactly what is shown here.</p>}
           </div>
           {diskDiffers && (
-            <div className="mt-4 flex flex-wrap gap-2 border-t border-[#333333] pt-4">
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-(--line) pt-4">
               <button type="button" onClick={() => setDiskCheck(null)} className={secondaryBtn}>Keep disk</button>
               <button type="button" onClick={() => void overwriteDisk()} disabled={overwriting || project.connections.length === 0} className={primaryBtn}>
                 {overwriting ? "Overwriting…" : "Overwrite disk"}
@@ -1095,14 +1066,14 @@ function Overview({ project, projects, accounts, onView, onAddConnection, onConn
           <CardHeading eyebrow="Setup" title={`${steps.filter((s) => s.done).length} of 3`} />
           <ol className="flex flex-col gap-1">
             {steps.map((step, i) => (
-              <li key={step.label} className="flex items-center gap-3 border-t border-[#333333] py-3 first:border-t-0 first:pt-0">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-semibold tabular-nums text-[#A3A3A3]">{i + 1}</span>
+              <li key={step.label} className="flex items-center gap-3 border-t border-(--line) py-3 first:border-t-0 first:pt-0">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--raised) text-[11px] font-semibold tabular-nums text-(--muted)">{i + 1}</span>
                 <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(step.done ? "green" : "pending")}>
                   {step.done ? "Done" : "Next"}
                 </span>
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-[#F5F5F5]">
+                <span className="min-w-0 flex-1 text-[13px] font-medium text-(--text)">
                   {step.label}
-                  <small className="block truncate text-[12px] font-normal tabular-nums text-[#A3A3A3]">{step.detail}</small>
+                  <small className="block truncate text-[12px] font-normal tabular-nums text-(--muted)">{step.detail}</small>
                 </span>
                 {i === 1 && !step.done && <button type="button" onClick={onAddConnection} className={smallBtn}>Connect</button>}
                 {i === 2 && !step.done && <button type="button" onClick={() => void verifyOnDisk()} disabled={verifying} className={smallBtn}>{verifying ? "Checking…" : "Verify"}</button>}
@@ -1122,16 +1093,16 @@ function Overview({ project, projects, accounts, onView, onAddConnection, onConn
           {lastBlock ? (
             <div className="flex flex-col gap-2"><AuditRow entry={lastBlock} /></div>
           ) : (
-            <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">
+            <p className="text-[13px] leading-[1.6] text-(--muted)">
               {mine.length === 0 ? "Nothing mediated yet. Route an agent through Nexus and the verdicts land here." : "No blocks — every mediated call was allowed."}
             </p>
           )}
           {live && (
-            <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-[#333333] pt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-(--line) pt-4">
               <button type="button" onClick={() => void runGuardedRead()} disabled={liveChecking} className={smallBtn}>
                 {liveChecking ? "Asking Supabase…" : liveCheck ? "Re-check approval live" : "Check approval live"}
               </button>
-              {liveCheck && <small className="text-[12px] tabular-nums" style={{ color: liveCheck.ok ? "#6FCE97" : "#F08A80" }}>{liveCheck.ok ? "✓ " : ""}{liveCheck.text}</small>}
+              {liveCheck && <small className="text-[12px] tabular-nums" style={{ color: liveCheck.ok ? "var(--green)" : "var(--red)" }}>{liveCheck.ok ? "✓ " : ""}{liveCheck.text}</small>}
             </div>
           )}
         </Card>
@@ -1142,29 +1113,29 @@ function Overview({ project, projects, accounts, onView, onAddConnection, onConn
             action={<button type="button" onClick={() => onView("activity")} className={ghostLink}>View all →</button>}
           />
           {mine.length === 0 ? (
-            <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">Allowed, blocked, denied — each mediated call shows here with its reason.</p>
+            <p className="text-[13px] leading-[1.6] text-(--muted)">Allowed, blocked, denied — each mediated call shows here with its reason.</p>
           ) : (
             <div className="flex max-h-[240px] flex-col gap-2 overflow-y-auto">{[...mine].slice(-4).reverse().map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} />)}</div>
           )}
         </Card>
       </div>
 
-      <Card className="flex min-h-[220px] shrink-0 flex-col overflow-hidden">
-        <CardHeading
+      <Card flush className="flex shrink-0 flex-col">
+        <div className="px-5 pt-4"><CardHeading
           eyebrow="Bindings"
           title={project.connections.length === 0 ? "None yet — Supabase first" : `${connected.length}/${project.connections.length} connected`}
-          action={<button type="button" onClick={() => onView("bindings")} className={ghostLink}>Manage →</button>}
-        />
+          action={<Button size="sm" variant="ghost" onPress={() => onView("bindings")}>Manage</Button>}
+        /></div>
         {project.connections.length === 0 ? (
-          <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">
+          <p className="px-5 pb-5 text-[13px] leading-[1.6] text-(--muted)">
             No resources yet.{" "}
-            <button type="button" onClick={onAddConnection} className="font-medium text-[#F5F5F5] underline underline-offset-2 hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]">
+            <button type="button" onClick={onAddConnection} className="font-medium text-(--text) underline underline-offset-2 hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">
               Connect a service in your browser
             </button>{" "}
             — pick the account and resource, the rest fills in.
           </p>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">{project.connections.map((connection) => <ConnectionRow key={connection.id} connection={connection} accounts={accounts} />)}</div>
+          <div className="flex min-h-0 flex-col">{project.connections.map((connection) => <ConnectionRow key={connection.id} connection={connection} accounts={accounts} />)}</div>
         )}
       </Card>
     </div>
@@ -1201,10 +1172,10 @@ function loadErrorLog(): ErrorRecord[] {
 
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-[10px] border border-[#333333] bg-[#212121] p-5 transition-[transform,opacity] duration-200">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">{label}</p>
-      <p className="mt-1 text-[24px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-[#F5F5F5]">{value}</p>
-      <p className="mt-1.5 text-[12px] tabular-nums text-[#A3A3A3]">{detail}</p>
+    <div className="rounded-[10px] border border-(--line) bg-(--panel) p-5 transition-[transform,opacity] duration-200">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-(--muted-2)">{label}</p>
+      <p className="mt-1 text-[24px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-(--text)">{value}</p>
+      <p className="mt-1.5 text-[12px] tabular-nums text-(--muted)">{detail}</p>
     </div>
   );
 }
@@ -1212,123 +1183,94 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function ConnectionRow({ connection, accounts, keySaved, onSaveKey, onRemove, onEdit }: { connection: Connection; accounts?: Account[]; keySaved?: boolean; onSaveKey?: () => void; onRemove?: () => void; onEdit?: () => void }) {
   const [copied, setCopied] = useState(false);
   const eligible = connection.provider === "Supabase" && !!connection.projectRef && !!connection.url;
-  const methodLabel = connection.method === "mcp" ? "MCP · browser approval" : "Manual details";
+  const methodLabel = connection.method === "mcp" ? "Browser approval" : "Manual details";
   const connected = connection.authState === "connected";
   const accountLabel = accountLabelForConnection(connection, accounts ?? starterAccounts);
   const resourceLabel = connection.resource ?? connection.target;
   const stateLabel = connected ? "Connected" : connection.authState === "pending" ? "Pending" : keySaved ? "Key saved" : "Not verified";
+  const stateTone = connected ? "success" : connection.authState === "pending" ? "warning" : keySaved ? "info" : "neutral";
+  const tier = tierForProvider(connection.provider);
   function copyRef() {
     if (!connection.projectRef) return;
     const done = () => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); };
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(connection.projectRef).then(done).catch(() => undefined);
   }
   return (
-    <div className="flex items-center gap-4 border-t border-[#333333] py-3 first:border-t-0 first:pt-0">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-[#262626] text-[10px] font-semibold text-[#F5F5F5]">{connection.short}</span>
-      <span className="w-[130px] shrink-0">
-        <strong className="block text-[13px] font-semibold text-[#F5F5F5]">{connection.provider}</strong>
-        <small className="block truncate text-[12px] text-[#A3A3A3]">{connection.detail}</small>
+    <div className="flex flex-wrap items-center gap-3 border-t border-(--line-soft) px-5 py-3 first:border-t-0">
+      <span className="nx-tile text-[11px] font-semibold" aria-hidden="true">{connection.short}</span>
+      <span className="flex min-w-[180px] flex-1 flex-col gap-0.5">
+        <span className="flex flex-wrap items-center gap-2">
+          <strong className="text-[13.5px] font-semibold text-(--text)">{connection.provider}</strong>
+          <Badge tone={tier === "native" ? "success" : tier === "curated" ? "info" : "warning"}>{tier}</Badge>
+        </span>
+        <span className="nx-mono truncate text-(--text)">{resourceLabel}</span>
+        <span className="truncate text-[12px] text-(--muted)">
+          {accountLabel ?? "Not linked"}{connection.environment ? ` · ${connection.environment}` : ""} · {methodLabel}
+          {connection.projectRef && (
+            <>
+              {" · "}<span className="nx-mono">{connection.projectRef}</span>{" "}
+              <button type="button" aria-label="Copy project reference" onClick={copyRef} className="underline underline-offset-2 hover:text-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">{copied ? "Copied" : "Copy"}</button>
+            </>
+          )}
+        </span>
       </span>
-      <span className="min-w-0 flex-1 text-[13px] font-medium tabular-nums text-[#F5F5F5]">
-        {resourceLabel}
-        <small className="block truncate text-[12px] font-normal text-[#A3A3A3]">
-          account: {accountLabel ?? "Not linked"}{connection.environment ? ` · ${connection.environment}` : ""} · {methodLabel}
-        </small>
-        {connection.projectRef && (
-          <small className="block truncate text-[11px] font-normal tabular-nums text-[#737373]">
-            ref: {connection.projectRef}{" "}
-            <button type="button" aria-label="Copy project reference" onClick={copyRef} className="underline underline-offset-2 hover:text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]">
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </small>
-        )}
-      </span>
-      <span className="hidden shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em] sm:inline-block" style={badgeStyle(connected ? "green" : connection.authState === "pending" ? "pending" : "default")}>
-        {stateLabel}
-      </span>
+      <Badge tone={stateTone} dot>{stateLabel}</Badge>
       <span className="flex shrink-0 gap-1.5">
         {onSaveKey && eligible && (
-          <button type="button" onClick={desktopAvailable() ? onSaveKey : undefined} disabled={!desktopAvailable()} className={smallBtn}>
+          <Button size="sm" variant="outline" isDisabled={!desktopAvailable()} onPress={desktopAvailable() ? onSaveKey : undefined}>
             {!desktopAvailable() ? "Desktop only" : keySaved ? "Manage key" : "Save key"}
-          </button>
+          </Button>
         )}
-        {onEdit && <button type="button" onClick={onEdit} className={smallBtn}>Edit</button>}
-        {onRemove && <button type="button" onClick={onRemove} className={dangerBtn}>Remove</button>}
+        {onEdit && <Button size="sm" variant="outline" onPress={onEdit}>Edit</Button>}
+        {onRemove && <Button size="sm" variant="danger-soft" onPress={onRemove}>Remove</Button>}
       </span>
     </div>
   );
 }
 
 function ProjectsView({ projects, selectedProject, onSelect, onAdd, onEdit, onRemove }: { projects: Project[]; selectedProject: string; onSelect: (name: string) => void; onAdd: () => void; onEdit: (project: Project) => void; onRemove: (project: Project) => void }) {
-  const [first, ...rest] = projects;
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
+    <div className="app-view flex w-full flex-col gap-4">
       <PageTitle
-        eyebrow="Workspace"
-        title="Projects"
-        description="One line per project: folder, Nexus project, environment, resources."
-        action={<button type="button" onClick={onAdd} className={primaryBtn}>+ Add project</button>}
+        description="One card per project: its folder, environment, and the resources it is bound to."
+        action={<Button size="sm" onPress={onAdd}><NxIcon name="plus" size={15} />Add project</Button>}
       />
-      {first && (
-        <button
-          type="button"
-          onClick={() => onSelect(first.id)}
-          className="grid shrink-0 gap-6 rounded-[12px] border border-[#333333] bg-[#212121] p-6 text-left transition-[transform,opacity] duration-200 hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5] sm:p-8 lg:grid-cols-[1fr_280px]"
-          style={first.id === selectedProject ? { borderColor: "#F5F5F5" } : undefined}
-        >
-          <span className="min-w-0">
-            <span className="flex items-center gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-[10px] bg-[#262626] text-[13px] font-semibold text-[#F5F5F5]">{first.initials}</span>
-              <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(first.id === selectedProject ? "green" : "default")}>
-                {first.id === selectedProject ? "Selected" : "Saved"}
-              </span>
-              <span className="text-[12px] tabular-nums text-[#A3A3A3]">{first.connections.length} connection{first.connections.length === 1 ? "" : "s"}</span>
-            </span>
-            <span className="mt-3 block text-[22px] font-semibold tracking-[-0.02em]">{first.name}</span>
-            <span className="mt-1 block truncate font-mono text-[12px] tabular-nums text-[#A3A3A3]">{first.path}</span>
-            <span className="mt-1 block text-[12px] tabular-nums text-[#737373]">
-              {first.environment}{first.connections.length > 0 ? ` · ${first.connections.map((c) => c.resource ?? c.target).join(" · ")}` : " · no resources"}
-            </span>
-          </span>
-          <span className="flex flex-col justify-end gap-2 border-t border-[#333333] pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-            <span className="text-[12px] leading-[1.6] text-[#A3A3A3]">Branch {first.branch} · {first.repo}</span>
-            <span className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-              <button type="button" onClick={() => onEdit(first)} className={smallBtn}>Edit</button>
-              <button type="button" onClick={() => onRemove(first)} className={dangerBtn}>Remove</button>
-            </span>
-          </span>
-        </button>
+      {projects.length === 0 ? (
+        <Card><Empty title="No projects yet" action={<Button size="sm" onPress={onAdd}>Add your first project</Button>}>Register a folder so Nexus knows which project an agent is in.</Empty></Card>
+      ) : (
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {projects.map((item) => {
+            const selected = item.id === selectedProject;
+            const shown = item.connections.slice(0, 4);
+            return (
+              <article key={item.id} className="nx-card flex flex-col gap-3" style={selected ? { borderColor: "var(--text)" } : undefined}>
+                <button type="button" onClick={() => onSelect(item.id)} aria-label={`Select ${item.name}`} className="flex items-start gap-3 rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">
+                  <span className="nx-tile"><NxIcon name="folder" size={17} /></span>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <strong className="truncate text-[15px] font-semibold text-(--text)">{item.name}</strong>
+                    <span className="nx-mono truncate text-(--muted)">{item.path}</span>
+                  </span>
+                  <Badge tone={selected ? "success" : "neutral"} dot={selected}>{selected ? "Selected" : "Saved"}</Badge>
+                </button>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge tone={item.environment.toLowerCase().startsWith("prod") ? "warning" : "neutral"}>{item.environment}</Badge>
+                  {shown.map((connection) => <span key={connection.id} className="nx-badge">{connection.provider} · {connection.resource ?? connection.target}</span>)}
+                  {item.connections.length > shown.length && <span className="nx-badge">+{item.connections.length - shown.length}</span>}
+                  {item.connections.length === 0 && <span className="text-[12px] text-(--muted)">No resources yet</span>}
+                </div>
+                <p className="truncate text-[12px] text-(--muted-2)">Branch {item.branch} · {item.repo}</p>
+                <div className="mt-auto flex items-center justify-between border-t border-(--line-soft) pt-3">
+                  <span className="text-[12px] tabular-nums text-(--muted)">{item.connections.length} connection{item.connections.length === 1 ? "" : "s"}</span>
+                  <span className="flex gap-1.5">
+                    <Button size="sm" variant="ghost" onPress={() => onEdit(item)}>Edit</Button>
+                    <Button size="sm" variant="danger-soft" onPress={() => onRemove(item)}>Remove</Button>
+                  </span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       )}
-      <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto sm:grid-cols-2">
-        {rest.map((item) => (
-          <article
-            key={item.id}
-            className="flex min-h-[190px] flex-col rounded-[10px] border border-[#333333] bg-[#212121] p-5 transition-[transform,opacity] duration-200 hover:-translate-y-0.5"
-            style={item.id === selectedProject ? { borderColor: "#F5F5F5" } : undefined}
-          >
-            <button type="button" onClick={() => onSelect(item.id)} className="flex w-full flex-col items-start gap-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]">
-              <span className="flex w-full items-center justify-between">
-                <span className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-[#262626] text-[12px] font-semibold text-[#F5F5F5]">{item.initials}</span>
-                <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(item.id === selectedProject ? "green" : "default")}>
-                  {item.id === selectedProject ? "Selected" : "Saved"}
-                </span>
-              </span>
-              <span className="mt-1 text-[16px] font-semibold tracking-[-0.01em] text-[#F5F5F5]">{item.name}</span>
-              <span className="truncate font-mono text-[12px] tabular-nums text-[#A3A3A3]">{item.path}</span>
-              <small className="text-[12px] tabular-nums text-[#737373]">
-                {item.environment}{item.connections.length > 0 ? ` · ${item.connections.map((c) => c.resource ?? c.target).join(" · ")}` : " · no resources"}
-              </small>
-            </button>
-            <div className="mt-auto flex w-full items-center justify-between border-t border-[#333333] pt-3 text-[12px] tabular-nums text-[#A3A3A3]">
-              <span>{item.connections.length} connection{item.connections.length === 1 ? "" : "s"}</span>
-              <span className="flex gap-1.5">
-                <button type="button" onClick={() => onEdit(item)} className={ghostLink}>Edit</button>
-                <button type="button" onClick={() => onRemove(item)} className="rounded-[6px] px-2 py-1 text-[12px] font-medium text-[#F08A80] hover:bg-[#3A1E1C] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F08A80]">Remove</button>
-              </span>
-            </div>
-          </article>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1340,7 +1282,7 @@ function ConnectAgentPicker({ projects, agentId, onConnect }: { projects: Projec
   useEffect(() => { if (!projects.some((p) => p.id === projectId) && projects[0]) setProjectId(projects[0].id); }, [projects, projectId]);
   return (
     <span className="flex items-center gap-2">
-      <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="Project to connect" className="h-8 max-w-[140px] rounded-[6px] border border-[#333333] bg-[#212121] px-2 text-[12px] tabular-nums text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]">
+      <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="Project to connect" className="h-8 max-w-[140px] rounded-[6px] border border-(--line) bg-(--panel) px-2 text-[12px] tabular-nums text-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">
         {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </select>
       <button type="button" onClick={() => projectId && onConnect(projectId, agentId)} className={smallBtn}>Connect</button>
@@ -1467,84 +1409,84 @@ function ConnectAgentModal({ project, initialAgentId, onClose }: { project: Proj
   return (
     <Modal title={`Connect ${agent.name} to ${project.name}`} description="Register the agent CLI against the single Nexus HTTP instance first; the file writer below is a legacy fallback." onClose={onClose}>
       <div className="flex flex-col gap-4">
-        <div className="overflow-hidden rounded-[8px] border border-[#333333]">
-          <div className="border-b border-[#333333] bg-[#1A1A1A] px-3 py-2">
-            <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#A3A3A3]">Preferred · CLI-first over HTTP (bound to {project.name})</strong>
+        <div className="overflow-hidden rounded-[8px] border border-(--line)">
+          <div className="border-b border-(--line) bg-(--canvas) px-3 py-2">
+            <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-(--muted)">Preferred · CLI-first over HTTP (bound to {project.name})</strong>
           </div>
-          <ul className="divide-y divide-[#2B2B2B]">
+          <ul className="divide-y divide-(--line-soft)">
             <li className="flex items-center gap-3 px-3 py-2.5">
-              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-[#F5F5F5]">{claudeCmd}</span>
+              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-(--text)">{claudeCmd}</span>
               <button type="button" onClick={() => copyText("cli-claude", claudeCmd)} className={ghostLink}>{copied === "cli-claude" ? "Copied" : "Copy"}</button>
             </li>
             <li className="flex items-center gap-3 px-3 py-2.5">
-              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-[#F5F5F5]">{codexCmd}</span>
+              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-(--text)">{codexCmd}</span>
               <button type="button" onClick={() => copyText("cli-codex", codexCmd)} className={ghostLink}>{copied === "cli-codex" ? "Copied" : "Copy"}</button>
             </li>
             <li className="flex items-center gap-3 px-3 py-2.5">
-              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-[#F5F5F5]">{httpUrl}</span>
+              <span className="min-w-0 flex-1 font-mono text-[11px] tabular-nums text-(--text)">{httpUrl}</span>
               <button type="button" onClick={() => copyText("cli-url", httpUrl)} className={ghostLink}>{copied === "cli-url" ? "Copied" : "Copy"}</button>
             </li>
           </ul>
-          <p className="border-t border-[#333333] bg-[#1A1A1A] px-3 py-2 text-[12px] leading-[1.6] text-[#A3A3A3]">
+          <p className="border-t border-(--line) bg-(--canvas) px-3 py-2 text-[12px] leading-[1.6] text-(--muted)">
             HTTP-only: run one command per project — the workspace in the URL is what pins the agent to {project.name}. A registration without a workspace is refused, never guessed.
           </p>
         </div>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Agent (legacy file fallback)</span>
+          <span className="text-[12px] font-medium text-(--text)">Agent (legacy file fallback)</span>
           <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setSteps([]); setWrittenEdit(null); }} disabled={busy} className={selectClass}>
             {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name} → {a.file}</option>)}
           </select>
         </label>
         <Note>
           {isManual
-            ? <>Copy the snippet into your agent&apos;s MCP settings, pointed at <strong>{project.path}</strong> as its working directory. Then run the readiness check below, mint a session (<kbd className="rounded-[4px] border border-[#333333] bg-[#212121] px-1.5 py-0.5 font-mono text-[11px]">POST /session</kbd> with this workspace), and call <kbd className="rounded-[4px] border border-[#333333] bg-[#212121] px-1.5 py-0.5 font-mono text-[11px]">nexus.context</kbd> with that session from the agent — it must answer {project.name}.</>
+            ? <>Copy the snippet into your agent&apos;s MCP settings, pointed at <strong>{project.path}</strong> as its working directory. Then run the readiness check below, mint a session (<kbd className="rounded-[4px] border border-(--line) bg-(--panel) px-1.5 py-0.5 font-mono text-[11px]">POST /session</kbd> with this workspace), and call <kbd className="rounded-[4px] border border-(--line) bg-(--panel) px-1.5 py-0.5 font-mono text-[11px]">nexus.context</kbd> with that session from the agent — it must answer {project.name}.</>
             : <>Fallback writes <strong>{agent.file}</strong> in <strong>{project.path}</strong> as a stdio bridge — that defeats the single-HTTP-instance lock, so prefer the CLI commands above. The fallback still checks the project file, bridge script, saved approval, and the written config. Restart {agent.name} in that folder afterwards.</>}
         </Note>
         {isManual && (
           <>
-            <div className="overflow-hidden rounded-[8px] border border-[#333333]">
-              <div className="flex items-center justify-between border-b border-[#333333] bg-[#1A1A1A] px-3 py-2">
-                <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#A3A3A3]">JSON style (Claude / Pi / Cursor / Windsurf)</strong>
+            <div className="overflow-hidden rounded-[8px] border border-(--line)">
+              <div className="flex items-center justify-between border-b border-(--line) bg-(--canvas) px-3 py-2">
+                <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-(--muted)">JSON style (Claude / Pi / Cursor / Windsurf)</strong>
                 <button type="button" onClick={() => copyText("json", manualJson)} className={ghostLink}>{copied === "json" ? "Copied" : "Copy"}</button>
               </div>
-              <pre className="m-0 overflow-x-auto whitespace-pre bg-[#212121] px-3 py-3 font-mono text-[11px] leading-[1.6] tabular-nums">{manualJson}</pre>
+              <pre className="m-0 overflow-x-auto whitespace-pre bg-(--panel) px-3 py-3 font-mono text-[11px] leading-[1.6] tabular-nums">{manualJson}</pre>
             </div>
-            <div className="overflow-hidden rounded-[8px] border border-[#333333]">
-              <div className="flex items-center justify-between border-b border-[#333333] bg-[#1A1A1A] px-3 py-2">
-                <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#A3A3A3]">TOML style (Codex)</strong>
+            <div className="overflow-hidden rounded-[8px] border border-(--line)">
+              <div className="flex items-center justify-between border-b border-(--line) bg-(--canvas) px-3 py-2">
+                <strong className="text-[11px] font-semibold uppercase tracking-[0.06em] text-(--muted)">TOML style (Codex)</strong>
                 <button type="button" onClick={() => copyText("toml", manualToml)} className={ghostLink}>{copied === "toml" ? "Copied" : "Copy"}</button>
               </div>
-              <pre className="m-0 overflow-x-auto whitespace-pre bg-[#212121] px-3 py-3 font-mono text-[11px] leading-[1.6] tabular-nums">{manualToml}</pre>
+              <pre className="m-0 overflow-x-auto whitespace-pre bg-(--panel) px-3 py-3 font-mono text-[11px] leading-[1.6] tabular-nums">{manualToml}</pre>
             </div>
             <Note>
               Launch the agent with {project.path} as its working directory — that folder is what pins it to {project.name}. A different working directory resolves a different project (or none).
             </Note>
           </>
         )}
-        <details className="rounded-[8px] border border-[#333333] px-3 py-2">
-          <summary className="cursor-pointer text-[12px] text-[#A3A3A3]">Bridge paths (advanced)</summary>
+        <details className="rounded-[8px] border border-(--line) px-3 py-2">
+          <summary className="cursor-pointer text-[12px] text-(--muted)">Bridge paths (advanced)</summary>
           <div className="flex flex-col gap-3 py-3">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Bridge script</span>
+              <span className="text-[12px] font-medium text-(--text)">Bridge script</span>
               <span className="flex gap-2">
                 <input value={bridgePath} onChange={(e) => setBridgePath(e.target.value)} placeholder="…/mcp/nexus-server.mjs" className={inputClass} />
                 {desktop && <button type="button" onClick={() => void browseFor("bridge")} disabled={picking !== null} className={secondaryBtn}>{picking === "bridge" ? "…" : "Browse"}</button>}
               </span>
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Keychain helper</span>
+              <span className="text-[12px] font-medium text-(--text)">Keychain helper</span>
               <span className="flex gap-2">
                 <input value={keyringPath} onChange={(e) => setKeyringPath(e.target.value)} placeholder="…/nexus-keyring" className={inputClass} />
                 {desktop && <button type="button" onClick={() => void browseFor("keyring")} disabled={picking !== null} className={secondaryBtn}>{picking === "keyring" ? "…" : "Browse"}</button>}
               </span>
             </label>
-            <small className="text-[12px] leading-[1.6] text-[#A3A3A3]">No default is assumed: in a dev checkout the bridge is {"<repo>/mcp/nexus-server.mjs"} and the helper is {"target/debug/nexus-keyring"}; in a packaged app both sit next to app resources. Browse once and Nexus remembers.</small>
+            <small className="text-[12px] leading-[1.6] text-(--muted)">No default is assumed: in a dev checkout the bridge is {"<repo>/mcp/nexus-server.mjs"} and the helper is {"target/debug/nexus-keyring"}; in a packaged app both sit next to app resources. Browse once and Nexus remembers.</small>
           </div>
         </details>
-        {error && <p className="text-[12px] text-[#F08A80]" role="alert">{error}</p>}
+        {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
         {!isManual && writtenEdit && (
-          <div className="rounded-[8px] border border-[#333333] bg-[#1A1A1A] px-3 py-2.5 text-[12px] leading-[1.6] tabular-nums text-[#A3A3A3]">
-            <p className="font-medium text-[#F5F5F5]">Wrote {writtenEdit.path}</p>
+          <div className="rounded-[8px] border border-(--line) bg-(--canvas) px-3 py-2.5 text-[12px] leading-[1.6] tabular-nums text-(--muted)">
+            <p className="font-medium text-(--text)">Wrote {writtenEdit.path}</p>
             {writtenEdit.diff && <p>Diff: {writtenEdit.diff}</p>}
             {writtenEdit.backup
               ? <p>Backup: {writtenEdit.backup} — existing entries for other servers were kept.</p>
@@ -1553,15 +1495,15 @@ function ConnectAgentModal({ project, initialAgentId, onClose }: { project: Proj
         )}
         {steps.length > 0 && (
           <div className="flex flex-col gap-2">
-          <ul className="divide-y divide-[#2B2B2B] rounded-[8px] border border-[#333333]">
+          <ul className="divide-y divide-(--line-soft) rounded-[8px] border border-(--line)">
             {steps.map((step) => (
               <li key={step.step} className="flex items-center gap-3 px-3 py-2.5">
                 <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(step.ok ? "green" : "red")}>
                   {step.ok ? "Pass" : "Fail"}
                 </span>
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-[#F5F5F5]">
+                <span className="min-w-0 flex-1 text-[13px] font-medium text-(--text)">
                   {step.step}
-                  <small className="block text-[12px] font-normal tabular-nums text-[#A3A3A3]">{step.detail}</small>
+                  <small className="block text-[12px] font-normal tabular-nums text-(--muted)">{step.detail}</small>
                 </span>
               </li>
             ))}
@@ -1573,14 +1515,14 @@ function ConnectAgentModal({ project, initialAgentId, onClose }: { project: Proj
           )}
           </div>
         )}
-        <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
           <button type="button" onClick={onClose} disabled={busy} className={secondaryBtn}>Close</button>
           <button type="button" onClick={() => void writeAndTest()} disabled={busy || !desktop} className={primaryBtn}>
             {busy ? "Working…" : isManual ? "Check project readiness" : writtenEdit ? "Re-run test" : "Write fallback config and test"}
           </button>
         </div>
         {allOk && !isManual && <Note>All Nexus-side checks pass. Restart {agent.name} in the project folder; its Supabase calls now go through guard.</Note>}
-        {allOk && isManual && <Note>Project side is ready. Paste a snippet above, restart your agent in the project folder, mint a session via <kbd className="rounded-[4px] border border-[#333333] bg-[#212121] px-1.5 py-0.5 font-mono text-[11px]">POST /session</kbd>, and confirm <kbd className="rounded-[4px] border border-[#333333] bg-[#212121] px-1.5 py-0.5 font-mono text-[11px]">nexus.context</kbd> answers {project.name}.</Note>}
+        {allOk && isManual && <Note>Project side is ready. Paste a snippet above, restart your agent in the project folder, mint a session via <kbd className="rounded-[4px] border border-(--line) bg-(--panel) px-1.5 py-0.5 font-mono text-[11px]">POST /session</kbd>, and confirm <kbd className="rounded-[4px] border border-(--line) bg-(--panel) px-1.5 py-0.5 font-mono text-[11px]">nexus.context</kbd> answers {project.name}.</Note>}
       </div>
     </Modal>
   );
@@ -1672,177 +1614,121 @@ function AgentsView({ projects, onConnect }: { projects: Project[]; onConnect: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktop, cliWorkspace]);
   const found = (agents ?? []).filter((a) => a.found);
+
+  /** One direct (unmanaged) MCP entry with Import / Remove, shared by the
+   *  project scan and each detected agent. */
+  function entryRow(entry: UnmanagedMcpEntry, agentId: string, where: string) {
+    const key = `${agentId}:${entry.name}`;
+    const busy = entryBusy === `${key}:import` || entryBusy === `${key}:remove`;
+    return (
+      <li key={`${entry.source}:${entry.name}`} className="flex flex-wrap items-center gap-3 px-5 py-3" style={{ borderTop: "1px solid var(--line-soft)" }}>
+        <Badge tone="warning">Unmanaged</Badge>
+        <span className="nx-row-body min-w-[160px]">
+          <span className="nx-mono text-(--text)">{entry.name}</span>
+          <span className="nx-row-sub">{where} · bypasses Nexus until imported</span>
+        </span>
+        <Button size="sm" variant="outline" isDisabled={busy || !desktop || !cliProject} onPress={() => void importEntry(agentId, entry)}>{entryBusy === `${key}:import` ? "Importing…" : "Import onto Nexus"}</Button>
+        <Button size="sm" variant="danger-soft" isDisabled={busy || !desktop || !cliProject} onPress={() => void removeEntry(agentId, entry)}>{entryBusy === `${key}:remove` ? "Removing…" : "Remove direct"}</Button>
+        {entryMsg[key] && <small className="w-full text-[11.5px] leading-[1.6] text-(--muted)">{entryMsg[key]}</small>}
+      </li>
+    );
+  }
+
+  function commandRow(kind: string, text: string, label: string) {
+    return (
+      <li className="flex items-center gap-3 px-5 py-3" style={{ borderTop: "1px solid var(--line-soft)" }}>
+        <span className="nx-row-body">
+          <span className="nx-mono break-all text-(--text)" style={{ whiteSpace: "normal" }}>{text}</span>
+          <span className="nx-row-sub" style={{ whiteSpace: "normal" }}>{label}</span>
+        </span>
+        <Button size="sm" variant="outline" onPress={() => copyCli(kind, text)}>{cliCopied === kind ? "Copied" : "Copy"}</Button>
+      </li>
+    );
+  }
+
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
-      <PageTitle eyebrow="Workspace" title="Agent sessions" description="Coding agents detected on this machine. Detection is not registration — an agent only goes through Nexus when registered against the single HTTP instance for its project." />
-      <Card className="flex max-h-[34vh] min-h-0 shrink-0 flex-col overflow-hidden">
-        <CardHeading
-          eyebrow="Recommended · CLI first over HTTP"
-          title="Point the agent at Nexus, not the provider"
-          action={
-            projects.length > 0 ? (
-              <label className="flex items-center gap-2 text-[12px] text-[#A3A3A3]">
-                <span>Register for</span>
-                <select
-                  value={cliProject?.id ?? ""}
-                  onChange={(event) => setCliProjectId(event.target.value)}
-                  aria-label="Project these commands register"
-                  className="h-8 rounded-[6px] border border-[#333333] bg-[#212121] px-2 text-[12px] text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]"
-                >
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>{project.name}</option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle("pending")}>Register a project first</span>
-            )
-          }
-        />
-        <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-          <li className="flex items-center gap-4 py-3">
-            <span className="min-w-0 flex-1 font-mono text-[12px] tabular-nums text-[#F5F5F5]">
-              {boundHttpUrl}
-              <small className="block font-sans text-[12px] font-normal text-[#A3A3A3]">
-                Nexus HTTP endpoint · NEXUS_HTTP_PORT default 3939 ·{" "}
-                {cliProject
-                  ? `bound to ${cliProject.name}. Register each project separately — a request with no workspace is refused, never guessed.`
-                  : "add a project to get a registration command: without a workspace the endpoint refuses every request."}
-              </small>
-            </span>
-            <button type="button" onClick={() => copyCli("url", boundHttpUrl)} className={smallBtn}>{cliCopied === "url" ? "Copied" : "Copy"}</button>
-          </li>
-          <li className="flex items-center gap-4 py-3">
-            <span className="min-w-0 flex-1 font-mono text-[12px] tabular-nums text-[#F5F5F5]">
-              {claudeHttpCmd}
-              <small className="block font-sans text-[12px] font-normal text-[#A3A3A3]">Claude Code — HTTP transport, bound to this project</small>
-            </span>
-            <button type="button" onClick={() => copyCli("claude", claudeHttpCmd)} className={smallBtn}>{cliCopied === "claude" ? "Copied" : "Copy"}</button>
-          </li>
-          <li className="flex items-center gap-4 py-3">
-            <span className="min-w-0 flex-1 font-mono text-[12px] tabular-nums text-[#F5F5F5]">
-              {codexHttpCmd}
-              <small className="block font-sans text-[12px] font-normal text-[#A3A3A3]">Codex — URL registration, bound to this project</small>
-            </span>
-            <button type="button" onClick={() => copyCli("codex", codexHttpCmd)} className={smallBtn}>{cliCopied === "codex" ? "Copied" : "Copy"}</button>
-          </li>
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
+      <PageTitle description="Coding agents detected on this machine. Detection is not registration: an agent only goes through Nexus once it is registered against the single HTTP instance for its project." />
+      <Card flush>
+        <div className="px-5 pt-4">
+          <CardHeading
+            eyebrow="Recommended · CLI over HTTP"
+            title="Point the agent at Nexus, not the provider"
+            action={
+              projects.length > 0 ? (
+                <label className="flex items-center gap-2 text-[12px] text-(--muted)">
+                  <span>Register for</span>
+                  <select value={cliProject?.id ?? ""} onChange={(event) => setCliProjectId(event.target.value)} aria-label="Project these commands register" className="h-8 rounded-[10px] border border-(--line) bg-(--panel) px-2 text-[12px] text-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">
+                    {projects.map((project) => (<option key={project.id} value={project.id}>{project.name}</option>))}
+                  </select>
+                </label>
+              ) : (
+                <Badge tone="warning">Register a project first</Badge>
+              )
+            }
+          />
+        </div>
+        <ul>
+          {commandRow("url", boundHttpUrl, `Nexus HTTP endpoint · port 3939 by default · ${cliProject ? `bound to ${cliProject.name}. Register each project separately; a request with no workspace is refused, never guessed.` : "add a project to get a registration command."}`)}
+          {commandRow("claude", claudeHttpCmd, "Claude Code · HTTP transport, bound to this project")}
+          {commandRow("codex", codexHttpCmd, "Codex · URL registration, bound to this project")}
         </ul>
-        <p className="mt-3 shrink-0 text-[12px] leading-[1.6] text-[#A3A3A3]">
-          HTTP-only: register with the CLI commands above. The per-folder file fallback below still works — pick a detected agent and use Connect to write its project config —
-          but a fallback file edit writes a stdio bridge that defeats the single-HTTP-instance lock, so prefer CLI.
-          A direct <kbd className="rounded-[4px] border border-[#333333] bg-[#262626] px-1.5 py-0.5 font-mono text-[11px] text-[#F5F5F5]">supabase-direct-unmanaged</kbd> entry
-          bypasses Nexus entirely: calls there are not guarded and never appear below. Route agent work through <kbd className="rounded-[4px] border border-[#333333] bg-[#262626] px-1.5 py-0.5 font-mono text-[11px] text-[#F5F5F5]">nexus.context / nexus.execute</kbd> with a workspace-bound session (<kbd className="rounded-[4px] border border-[#333333] bg-[#262626] px-1.5 py-0.5 font-mono text-[11px] text-[#F5F5F5]">POST /session</kbd> → <kbd className="rounded-[4px] border border-[#333333] bg-[#262626] px-1.5 py-0.5 font-mono text-[11px] text-[#F5F5F5]">X-Nexus-Session</kbd>).
+        <p className="border-t border-(--line-soft) px-5 py-3 text-[12px] leading-[1.6] text-(--muted)">
+          Register with the CLI commands above. The per-folder fallback below writes a stdio bridge, which defeats the single-instance lock, so prefer the CLI. A direct <span className="nx-mono">supabase-direct-unmanaged</span> entry bypasses Nexus entirely: calls there are not guarded and never appear in Activity.
         </p>
       </Card>
+
       {desktop && cliProject && projectEntries !== null && projectEntries.length > 0 && (
-        <Card className="flex max-h-[30vh] min-h-0 shrink-0 flex-col overflow-hidden">
-          <CardHeading eyebrow={`Project scan · ${cliProject.name}`} title={`${projectEntries.length} direct ${projectEntries.length === 1 ? "entry" : "entries"} in workspace configs`} />
-          <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-            {projectEntries.map((entry) => {
-              const agentId = agentForProjectEntry(entry);
-              const key = `${agentId}:${entry.name}`;
-              const busy = entryBusy === `${key}:import` || entryBusy === `${key}:remove`;
+        <Card flush>
+          <div className="px-5 pt-4"><CardHeading eyebrow={`Project scan · ${cliProject.name}`} title={`${projectEntries.length} direct ${projectEntries.length === 1 ? "entry" : "entries"} in workspace configs`} /></div>
+          <ul>{projectEntries.map((entry) => entryRow(entry, agentForProjectEntry(entry), `${entry.source} · ${agentForProjectEntry(entry)}`))}</ul>
+        </Card>
+      )}
+
+      {!desktop && (
+        <Card><Empty title="Open the desktop app">Agent detection needs local machine access. The browser preview cannot see installed agents.</Empty></Card>
+      )}
+      {desktop && agents === null && (
+        <Card>
+          <div className="mx-auto flex max-w-[420px] flex-col gap-2 py-4" aria-label="Scanning for agents">
+            <div className="h-[52px] animate-pulse rounded-[10px] bg-(--raised)" />
+            <div className="h-[52px] animate-pulse rounded-[10px] bg-(--raised)" />
+            <p className="mt-2 text-center text-[13px] text-(--muted)">Looking for known agent commands and configs.</p>
+          </div>
+        </Card>
+      )}
+      {desktop && agents !== null && agents.length === 0 && (
+        <Card><Empty title="No agents detected">None of the known agent commands or configs were found. An agent appearing later still bypasses Nexus until its project config points at the bridge.</Empty></Card>
+      )}
+      {desktop && found.length > 0 && (
+        <Card flush>
+          <div className="px-5 pt-4"><CardHeading eyebrow="Detected on this machine" title={`${found.length} agent${found.length === 1 ? "" : "s"} found`} /></div>
+          <ul>
+            {found.map((agent) => {
+              const unmanaged = agent.unmanaged ?? [];
               return (
-                <li key={`${entry.source}:${entry.name}`} className="flex flex-wrap items-center gap-2 py-2.5">
-                  <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle("pending")}>found,unmanaged</span>
-                  <span className="min-w-0 flex-1 font-mono text-[12px] tabular-nums text-[#F5F5F5]">
-                    {entry.name}
-                    <small className="block font-sans text-[11px] font-normal text-[#737373]">{entry.source} · {agentId} · bypasses Nexus until imported</small>
-                  </span>
-                  <button type="button" onClick={() => void importEntry(agentId, entry)} disabled={busy || !desktop || !cliProject} className={smallBtn}>
-                    {entryBusy === `${key}:import` ? "Importing…" : "Import onto Nexus"}
-                  </button>
-                  <button type="button" onClick={() => void removeEntry(agentId, entry)} disabled={busy || !desktop || !cliProject} className={dangerBtn}>
-                    {entryBusy === `${key}:remove` ? "Removing…" : "Remove direct"}
-                  </button>
-                  {entryMsg[key] && <small className="w-full text-[11px] leading-[1.6] tabular-nums text-[#A3A3A3]">{entryMsg[key]}</small>}
+                <li key={agent.id} style={{ borderTop: "1px solid var(--line-soft)" }}>
+                  <div className="flex flex-wrap items-center gap-3 px-5 py-3">
+                    <span className="nx-tile text-[11px] font-semibold" data-tone="success" aria-hidden="true">{agent.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="nx-row-body min-w-[140px]">
+                      <span className="nx-row-title">{agent.name}</span>
+                      <span className="nx-row-sub">{agent.detail}</span>
+                    </span>
+                    <span className="nx-row-body min-w-[140px]">
+                      <span className="nx-row-sub">Route via Nexus</span>
+                      <span className="nx-row-sub nx-mono" title={agent.nexus_config}>{agent.nexus_config}</span>
+                    </span>
+                    <ConnectAgentPicker projects={projects} agentId={agent.id} onConnect={onConnect} />
+                  </div>
+                  {unmanaged.length > 0 && <ul className="bg-(--raised)">{unmanaged.map((entry) => entryRow(entry, agent.id, entry.source))}</ul>}
                 </li>
               );
             })}
           </ul>
         </Card>
       )}
-      {!desktop && (
-        <Card className="mx-auto w-full max-w-[720px] py-12 text-center">
-          <p className="mx-auto max-w-[420px] font-serif text-[22px] leading-[1.3] tracking-[-0.02em]" style={{ fontFamily: "Georgia, 'Newsreader', serif" }}>Open the desktop app</p>
-          <p className="mx-auto mt-2 max-w-[420px] text-[13px] leading-[1.6] text-[#A3A3A3]">Agent detection needs local machine access. The browser preview cannot see installed agents.</p>
-        </Card>
-      )}
-      {desktop && agents === null && (
-        <Card className="mx-auto w-full max-w-[720px] py-12 text-center">
-          <div className="mx-auto flex max-w-[420px] flex-col gap-2" aria-label="Scanning for agents">
-            <div className="h-[52px] animate-pulse rounded-[8px] bg-[#262626]" />
-            <div className="h-[52px] animate-pulse rounded-[8px] bg-[#262626]" />
-          </div>
-          <p className="mt-4 text-[13px] text-[#A3A3A3]">Looking for known agent commands and configs.</p>
-        </Card>
-      )}
-      {desktop && agents !== null && agents.length === 0 && (
-        <Card className="mx-auto w-full max-w-[720px] py-12 text-center">
-          <p className="mx-auto max-w-[420px] font-serif text-[22px] leading-[1.3] tracking-[-0.02em]" style={{ fontFamily: "Georgia, 'Newsreader', serif" }}>No agents detected</p>
-          <p className="mx-auto mt-2 max-w-[420px] text-[13px] leading-[1.6] text-[#A3A3A3]">None of the known agent commands or configs were found. An agent appearing later still bypasses Nexus until its project config points at the bridge.</p>
-        </Card>
-      )}
-      {desktop && found.length > 0 && (
-        <Card className="flex max-h-[52vh] min-h-0 flex-1 flex-col overflow-hidden">
-          <CardHeading eyebrow="Detected on this machine" title={`${found.length} agent${found.length === 1 ? "" : "s"} found`} />
-          <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-            {found.map((agent) => {
-              const unmanaged = agent.unmanaged ?? [];
-              return (
-              <li key={agent.id} className="flex flex-col gap-2 py-3">
-                <span className="flex flex-wrap items-center gap-4">
-                <span className="flex h-9 w-9 items-center justify-center rounded-[8px] bg-[#1C2E23] text-[10px] font-semibold text-[#6FCE97]">{agent.name.slice(0, 2).toUpperCase()}</span>
-                <span className="min-w-[140px] flex-1">
-                  <strong className="block text-[13px] font-semibold text-[#F5F5F5]">{agent.name}</strong>
-                  <small className="block text-[12px] tabular-nums text-[#A3A3A3]">{agent.detail}</small>
-                </span>
-                <span className="min-w-0 flex-1 text-[12px] text-[#A3A3A3]">
-                  Route via Nexus
-                  <small className="block truncate font-mono text-[11px] tabular-nums text-[#737373]">{agent.nexus_config}</small>
-                </span>
-                <ConnectAgentPicker projects={projects} agentId={agent.id} onConnect={onConnect} />
-                </span>
-                {unmanaged.length > 0 && (
-                  <ul className="flex flex-col gap-1.5 pl-[52px]">
-                    {unmanaged.map((entry) => {
-                      const key = `${agent.id}:${entry.name}`;
-                      const busy = entryBusy === `${key}:import` || entryBusy === `${key}:remove`;
-                      return (
-                      <li key={entry.name} className="flex flex-wrap items-center gap-2 rounded-[8px] border border-[#333333] bg-[#1A1A1A] px-3 py-2">
-                        <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle("pending")}>found,unmanaged</span>
-                        <span className="min-w-0 flex-1 font-mono text-[12px] tabular-nums text-[#F5F5F5]">
-                          {entry.name}
-                          <small className="block font-sans text-[11px] font-normal text-[#737373]">{entry.source} · bypasses Nexus until imported</small>
-                        </span>
-                        <button type="button" onClick={() => void importEntry(agent.id, entry)} disabled={busy || !desktop || !cliProject} className={smallBtn}>
-                          {entryBusy === `${key}:import` ? "Importing…" : "Import onto Nexus"}
-                        </button>
-                        <button type="button" onClick={() => void removeEntry(agent.id, entry)} disabled={busy || !desktop || !cliProject} className={dangerBtn}>
-                          {entryBusy === `${key}:remove` ? "Removing…" : "Remove direct"}
-                        </button>
-                        {entryMsg[key] && <small className="w-full text-[11px] leading-[1.6] tabular-nums text-[#A3A3A3]">{entryMsg[key]}</small>}
-                      </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
-            {desktop &&(
-        <Note>Live traffic lives on Home — this tab only sets agents up and shows whether each one is connected.</Note>
-      )}
 
-      {desktop && agents !== null && agents.some((a) => !a.found) && (
-        <Note>Not seen: {agents.filter((a) => !a.found).map((a) => a.name).join(", ")}. Install one and its project config decides whether Nexus guards it.</Note>
-      )}
-      {desktop && (
-        <Note><strong className="font-semibold text-[#F5F5F5]">Unmanaged until routed.</strong> A detected agent with a direct provider setup bypasses Nexus. Point its project config at the Nexus bridge.</Note>
-      )}
+      {desktop && <Note>Live traffic lives on Home. This tab only sets agents up and shows whether each one is connected.{agents !== null && agents.some((a) => !a.found) ? ` Not seen: ${agents.filter((a) => !a.found).map((a) => a.name).join(", ")}.` : ""} A detected agent with a direct provider setup bypasses Nexus until its project config points at the bridge.</Note>}
     </div>
   );
 }
@@ -1855,22 +1741,20 @@ function BindingsView({ project, projects, accounts, onAdd, vaultUnlocked, saved
   // Per-project shared-account warning (accounts.ts helper).
   const blastWarnings = blastRadiusWarningsFor(project.id, projects ?? [project], accounts);
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
+    <div className="app-view flex w-full flex-col gap-4">
       <PageTitle
-        eyebrow={`${project.name} · Workspace`}
-        title="Bindings"
-        description="Services-first: link a login once under Services, then bind one account + resource per project here. Bindings are per-project pairs — never raw secrets."
-        action={<button type="button" onClick={onAdd} className={primaryBtn}>+ Add binding</button>}
+        description="Link a login once under Services, then bind one account and resource per project here. Bindings are per-project pairs, never raw secrets."
+        action={<Button size="sm" onPress={onAdd}><NxIcon name="plus" size={15} />Add binding</Button>}
       />
       {blastWarnings.length > 0 && (
-        <details className="max-w-[930px] shrink-0 rounded-[10px] border border-[#333333] bg-[#212121] px-6 py-4">
-          <summary className="cursor-pointer text-[13px] font-semibold text-[#F5F5F5]">
-            Shared account warning — {blastWarnings.length} login{blastWarnings.length === 1 ? "" : "s"} also bound elsewhere
+        <details className="nx-card shrink-0 !py-3">
+          <summary className="cursor-pointer text-[13px] font-medium text-(--text)">
+            <Badge tone="warning">Shared</Badge>{" "}{blastWarnings.length} login{blastWarnings.length === 1 ? "" : "s"} also bound elsewhere
           </summary>
-          <ul className="mt-2 flex flex-col gap-1.5 text-[12px] leading-[1.6] tabular-nums text-[#A3A3A3]">
+          <ul className="mt-3 flex flex-col gap-1.5 text-[12.5px] leading-[1.6] text-(--muted)">
             {blastWarnings.map((entry) => (
               <li key={entry.accountKey}>
-                {entry.provider} · {entry.accountLabel} — also bound by {(projects ?? [project]).filter((p) => p.id !== project.id && entry.projectIds.includes(p.id)).map((p) => p.name).join(", ") || "another project"}.
+                <strong className="font-medium text-(--text)">{entry.provider} · {entry.accountLabel}</strong> is also bound by {(projects ?? [project]).filter((p) => p.id !== project.id && entry.projectIds.includes(p.id)).map((p) => p.name).join(", ") || "another project"}.
                 A compromised credential here reaches multiple workspaces.
               </li>
             ))}
@@ -1878,128 +1762,125 @@ function BindingsView({ project, projects, accounts, onAdd, vaultUnlocked, saved
         </details>
       )}
       {unlinked.length > 0 && (
-        <div className="flex max-w-[930px] shrink-0 flex-wrap items-center gap-2 rounded-[8px] border border-[#333333] bg-[#212121] px-3 py-2.5 text-[12px] leading-[1.6] text-[#A3A3A3]">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-[12px] bg-(--orange-bg) px-4 py-3 text-[12.5px] leading-[1.5] text-(--orange)">
           <span className="min-w-0 flex-1">{unlinked.length} binding{unlinked.length === 1 ? "" : "s"} without a linked account. Link the login under Services first, then Edit the binding to pick it.</span>
-          {onOpenServices && <button type="button" onClick={onOpenServices} className={smallBtn}>Open Services</button>}
+          {onOpenServices && <Button size="sm" variant="outline" onPress={onOpenServices}>Open Services</Button>}
         </div>
       )}
       {project.connections.length > 3 && (
-        <div className="shrink-0">
-          <input value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter bindings" placeholder="Filter bindings…" className={inputClass} style={{ maxWidth: 340 }} />
-        </div>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter bindings" placeholder="Filter bindings…" className={inputClass} style={{ maxWidth: 340 }} />
       )}
-      <Card className="flex max-w-[930px] flex-1 flex-col overflow-hidden">
+      <Card flush className="flex min-h-0 flex-col">
         {visible.length === 0 ? (
-          <div className="py-8 text-center">
-            <p className="mx-auto max-w-[420px] font-serif text-[22px] leading-[1.3] tracking-[-0.02em]" style={{ fontFamily: "Georgia, 'Newsreader', serif" }}>
-              {project.connections.length === 0 ? "Nothing bound yet." : "No bindings match that filter."}
-            </p>
-            {project.connections.length === 0 && (
-              <button type="button" onClick={onAdd} className={`${primaryBtn} mt-4`}>Add the first binding</button>
-            )}
-          </div>
+          <Empty title={project.connections.length === 0 ? "Nothing bound yet" : "No bindings match that filter"} action={project.connections.length === 0 ? <Button size="sm" onPress={onAdd}>Add the first binding</Button> : undefined}>
+            {project.connections.length === 0 ? "Bind one account and resource so agents in this project reach the right service." : "Try a different word."}
+          </Empty>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+          <div className="flex min-h-0 flex-col overflow-y-auto">
             {visible.map((connection) => (
               <ConnectionRow key={connection.id} connection={connection} accounts={accounts} keySaved={connection.keySaved || (vaultUnlocked && savedKeys[connection.id])} onSaveKey={() => onSaveKey(connection)} onRemove={() => onRemove(connection)} onEdit={() => onEdit(connection)} />
             ))}
           </div>
         )}
       </Card>
-      <div className="max-w-[930px] shrink-0">
-        <Note><strong className="font-semibold text-[#F5F5F5]">Bindings are not services.</strong> A binding is this project&apos;s account and resource pair. A saved publishable key stays in this desktop vault. Agents receive guarded tools.</Note>
-      </div>
+      <Note><strong className="font-semibold text-(--text)">Bindings are not services.</strong> A binding is this project&apos;s account and resource pair. A saved publishable key stays in this desktop vault. Agents receive guarded tools.</Note>
     </div>
   );
 }
 
 function ServicesView({ projects, accounts, onAddAccount, onRemoveAccount }: { projects: Project[]; accounts: Account[]; onAddAccount: (input: { provider: string; label: string }) => void; onRemoveAccount: (id: string) => void }) {
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("All");
   const [accountModal, setAccountModal] = useState(false);
   const blastRadius = detectBlastRadius(projects, accounts);
   const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
   const q = query.trim().toLowerCase();
+  const categories = ["All", ...[...new Set(PROVIDER_CATALOG.flatMap((p) => p.tags))].sort()];
   const visibleAccounts = accounts.filter((a) => !q || [a.provider, a.label, a.id, a.authState].some((f) => (f ?? "").toLowerCase().includes(q)));
-  const visibleCatalog = PROVIDER_CATALOG.filter((p) => !q || [p.provider, p.tier, ...p.tags].some((f) => f.toLowerCase().includes(q)));
+  const visibleCatalog = PROVIDER_CATALOG.filter((p) => (category === "All" || p.tags.includes(category)) && (!q || [p.provider, p.tier, ...p.tags].some((f) => f.toLowerCase().includes(q))));
+  const tierTone = (tier: string): Tone => (tier === "native" ? "success" : tier === "curated" ? "info" : "warning");
 
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
-      <PageTitle eyebrow="Global" title="Services" description="Services-first: link provider accounts once, then bind one account + resource per project under Bindings. Unreviewed services stay fail-closed and denied until allowed." />
-      <div className="shrink-0" style={{ maxWidth: 340 }}>
-        <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Filter services" placeholder="Filter services…" className={inputClass} />
-      </div>
-      <div className="app-columns flex min-h-0 flex-1 flex-col gap-6 overflow-visible lg:grid lg:grid-cols-2">
-        <Card className="flex min-h-[360px] max-h-[560px] flex-col overflow-hidden">
-          <CardHeading eyebrow="Service catalog" title={`${visibleCatalog.length} known`} />
-          <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-          {visibleCatalog.map((entry) => (
-            <li key={entry.provider} className="flex items-center gap-4 py-3">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-[#262626] text-[10px] font-semibold text-[#F5F5F5]">{entry.provider.slice(0, 2).toUpperCase()}</span>
-              <span className="min-w-0 flex-1">
-                <strong className="block text-[13px] font-semibold text-[#F5F5F5]">{entry.provider}</strong>
-                <small className="block truncate text-[12px] text-[#A3A3A3]">{entry.tags.join(" · ")}</small>
-              </span>
-              <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(entry.tier === "native" ? "green" : "blue")}>
-                {entry.tier}
-              </span>
-            </li>
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
+      <PageTitle
+        description="Link provider accounts once, then bind one account and resource per project under Bindings. Unreviewed services stay fail-closed until you allow them."
+        action={<Button size="sm" onPress={() => setAccountModal(true)}><NxIcon name="plus" size={15} />Link account</Button>}
+      />
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <label className="flex min-w-[240px] items-center gap-2 rounded-[10px] border border-(--line) bg-(--panel) px-3 py-2 text-(--muted)">
+          <NxIcon name="search" size={15} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Filter services" placeholder="Search services…" className="min-w-0 flex-1 bg-transparent text-[13px] text-(--text) outline-none placeholder:text-(--muted-2)" />
+        </label>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Category">
+          {categories.map((name) => (
+            <button key={name} type="button" aria-pressed={category === name} onClick={() => setCategory(name)} className="nx-badge cursor-pointer !px-3 !py-1.5 text-[12px]" data-tone={category === name ? "success" : undefined} style={category === name ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>
+              {name}
+            </button>
           ))}
-        </ul>
-        <p className="mt-3 shrink-0 text-[12px] leading-[1.6] text-[#A3A3A3]">Anything outside this list can still be added below as self-added — every action stays fail-closed (denied until allowed) until you reclassify it.</p>
-      </Card>
-      <div className="flex flex-col gap-6">
-      <Card className="flex min-h-[300px] max-h-[560px] flex-col overflow-hidden">
-        <CardHeading
-          eyebrow="Account registry"
-          title={`${visibleAccounts.length} account${visibleAccounts.length === 1 ? "" : "s"}`}
-          action={<button type="button" onClick={() => setAccountModal(true)} className={smallBtn}>+ Link account</button>}
-        />
-        {visibleAccounts.length === 0 ? (
-          <p className="text-[13px] text-[#A3A3A3]">No accounts match that filter.</p>
-        ) : (
-          <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-            {visibleAccounts.map((account) => {
-              const inUse = projects.filter((p) => (p.connections ?? []).some((c) => (c.accountId ?? c.account) === account.id)).length;
-              return (
-                <li key={account.id} className="service-account-row flex flex-wrap items-center gap-4 py-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-[#262626] text-[10px] font-semibold text-[#F5F5F5]">{account.provider.slice(0, 2).toUpperCase()}</span>
-                  <span className="min-w-[180px] flex-[1_1_190px]">
-                    <strong className="block text-[13px] font-semibold text-[#F5F5F5]">{account.provider}</strong>
-                    <small className="block text-[12px] text-[#A3A3A3]">account: {account.label}{inUse > 0 ? ` · bound by ${inUse}` : ""}</small>
-                  </span>
-                  <span className="service-account-id min-w-[220px] flex-[1.5_1_260px] font-mono text-[12px] tabular-nums text-[#F5F5F5]" title={account.id}>
-                    <strong className="block truncate font-mono font-normal">{account.id}</strong>
-                    <small className="block font-sans text-[11px] text-[#737373]">id · never a bare provider</small>
-                  </span>
-                  <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(tierForProvider(account.provider) === "native" ? "green" : tierForProvider(account.provider) === "curated" ? "blue" : "pending")}>
-                    {tierForProvider(account.provider)}
-                  </span>
-                  <button type="button" onClick={() => onRemoveAccount(account.id)} className={dangerBtn}>Remove</button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Card>
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeading eyebrow="Blast radius" title={blastRadius.length === 0 ? "No shared accounts" : `${blastRadius.length} shared account${blastRadius.length === 1 ? "" : "s"}`} />
-        {blastRadius.length === 0 ? (
-          <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">Each account is used by a single project. Sharing one login across projects widens what a compromised credential can reach.</p>
-        ) : (
-          <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
-            {blastRadius.map((entry) => (
-              <li key={entry.accountKey} className="flex items-center gap-4 py-3">
-                <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle("pending")}>Shared</span>
-                <span className="min-w-0 flex-1 text-[13px] font-medium tabular-nums text-[#F5F5F5]">
-                  {entry.provider} · {entry.accountLabel}
-                  <small className="block text-[12px] font-normal text-[#A3A3A3]">{entry.projectIds.map(projectName).join(" · ")}</small>
+        </div>
+      </div>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
+        <Card flush className="flex min-h-[320px] flex-col lg:max-h-[620px]">
+          <div className="px-5 pt-4"><CardHeading eyebrow="Service catalog" title={`${visibleCatalog.length} known`} /></div>
+          <ul className="min-h-0 flex-1 overflow-y-auto">
+            {visibleCatalog.map((entry) => (
+              <li key={entry.provider} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                <span className="nx-tile text-[11px] font-semibold" aria-hidden="true">{entry.provider.slice(0, 2).toUpperCase()}</span>
+                <span className="nx-row-body">
+                  <span className="nx-row-title">{entry.provider}</span>
+                  <span className="nx-row-sub">{entry.tags.join(" · ")}</span>
                 </span>
+                <Badge tone={tierTone(entry.tier)}>{entry.tier}</Badge>
               </li>
             ))}
+            {visibleCatalog.length === 0 && <li><Empty title="No services match">Try a different word or category.</Empty></li>}
           </ul>
-        )}
-      </Card>
-      </div>
+          <p className="shrink-0 border-t border-(--line-soft) px-5 py-3 text-[12px] leading-[1.6] text-(--muted)">Anything outside this list can be linked as self-added. Every action stays fail-closed until you reclassify it.</p>
+        </Card>
+        <div className="flex min-h-0 flex-col gap-4">
+          <Card flush className="flex flex-col">
+            <div className="px-5 pt-4"><CardHeading eyebrow="Account registry" title={`${visibleAccounts.length} account${visibleAccounts.length === 1 ? "" : "s"}`} /></div>
+            {visibleAccounts.length === 0 ? (
+              <Empty title="No accounts match">Link a login to bind it to projects.</Empty>
+            ) : (
+              <ul className="max-h-[360px] overflow-y-auto">
+                {visibleAccounts.map((account) => {
+                  const inUse = projects.filter((p) => (p.connections ?? []).some((c) => (c.accountId ?? c.account) === account.id)).length;
+                  const tier = tierForProvider(account.provider);
+                  return (
+                    <li key={account.id} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                      <span className="nx-tile text-[11px] font-semibold" aria-hidden="true">{account.provider.slice(0, 2).toUpperCase()}</span>
+                      <span className="nx-row-body">
+                        <span className="nx-row-title">{account.provider} · {account.label}</span>
+                        <span className="nx-row-sub"><span className="nx-mono" title={account.id}>{account.id}</span>{inUse > 0 ? ` · bound by ${inUse}` : ""}</span>
+                      </span>
+                      <Badge tone={tierTone(tier)}>{tier}</Badge>
+                      <Button size="sm" variant="danger-soft" onPress={() => onRemoveAccount(account.id)}>Remove</Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+          <Card flush>
+            <div className="px-5 pt-4"><CardHeading eyebrow="Blast radius" title={blastRadius.length === 0 ? "No shared accounts" : `${blastRadius.length} shared account${blastRadius.length === 1 ? "" : "s"}`} /></div>
+            {blastRadius.length === 0 ? (
+              <p className="px-5 pb-5 text-[13px] leading-[1.6] text-(--muted)">Each account is used by a single project. Sharing one login across projects widens what a compromised credential can reach.</p>
+            ) : (
+              <ul>
+                {blastRadius.map((entry) => (
+                  <li key={entry.accountKey} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                    <Badge tone="warning">Shared</Badge>
+                    <span className="nx-row-body">
+                      <span className="nx-row-title">{entry.provider} · {entry.accountLabel}</span>
+                      <span className="nx-row-sub">{entry.projectIds.map(projectName).join(" · ")}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
       </div>
       {accountModal && <AddAccountModal onClose={() => setAccountModal(false)} onSave={(input) => { onAddAccount(input); setAccountModal(false); }} />}
     </div>
@@ -2030,19 +1911,19 @@ function AddAccountModal({ onClose, onSave }: { onClose: () => void; onSave: (in
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Service</span>
+            <span className="text-[12px] font-medium text-(--text)">Service</span>
             <select value={provider} onChange={(e) => setProvider(e.target.value)} className={selectClass}>
               {catalogProviders.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Account label</span>
+            <span className="text-[12px] font-medium text-(--text)">Account label</span>
             <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="personal" className={inputClass} />
           </label>
         </div>
         {provider === "Other…" && (
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Custom service name</span>
+            <span className="text-[12px] font-medium text-(--text)">Custom service name</span>
             <input value={customProvider} onChange={(e) => setCustomProvider(e.target.value)} placeholder="Acme API" className={inputClass} />
           </label>
         )}
@@ -2050,15 +1931,15 @@ function AddAccountModal({ onClose, onSave }: { onClose: () => void; onSave: (in
           <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(tier === "native" ? "green" : tier === "curated" ? "blue" : "pending")}>
             {tier}
           </span>
-          {tier === "self-added" && <small className="text-[12px] text-[#A3A3A3]">This service hasn&apos;t been reviewed by Nexus — every action stays fail-closed (denied until you allow it) until you reclassify it.</small>}
+          {tier === "self-added" && <small className="text-[12px] text-(--muted)">This service hasn&apos;t been reviewed by Nexus — every action stays fail-closed (denied until you allow it) until you reclassify it.</small>}
         </div>
         {tier === "self-added" && (
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-[8px] border border-[#333333] bg-[#1A1A1A] p-3 text-[12px] leading-[1.6] text-[#A3A3A3]">
-            <input type="checkbox" checked={selfAddedConfirm} onChange={(e) => setSelfAddedConfirm(e.target.checked)} className="mt-1 accent-[#F5F5F5]" />
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[8px] border border-(--line) bg-(--canvas) p-3 text-[12px] leading-[1.6] text-(--muted)">
+            <input type="checkbox" checked={selfAddedConfirm} onChange={(e) => setSelfAddedConfirm(e.target.checked)} className="mt-1 accent-(--text)" />
             <span>I understand this login is unreviewed and fail-closed — agents get nothing from it until I bind it and explicitly allow calls.</span>
           </label>
         )}
-        <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
           <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
           <button type="submit" disabled={!canSave} className={primaryBtn}>Add account</button>
         </div>
@@ -2144,7 +2025,7 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
     sensitive: "Secrets, tokens, credentials",
   };
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
       <PageTitle
         eyebrow="Monitor"
         title="Guard rules"
@@ -2159,39 +2040,39 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
       </div>
       <div className="app-columns flex min-h-0 flex-1 flex-col gap-6 overflow-visible lg:grid lg:grid-cols-2">
       <div className="app-column flex min-h-0 flex-col gap-6 overflow-visible lg:h-full">
-      <details className="shrink-0 rounded-[10px] border border-[#333333] bg-[#212121] px-6 py-4">
-        <summary className="cursor-pointer text-[13px] font-semibold text-[#F5F5F5]">How Guard classifies calls (reference)</summary>
+      <details className="nx-card shrink-0 !py-3">
+        <summary className="cursor-pointer text-[13px] font-semibold text-(--text)">How Guard classifies calls (reference)</summary>
         <div className="max-h-[30vh] overflow-y-auto pt-2">
-        <ul className="divide-y divide-[#2B2B2B]">
+        <ul className="divide-y divide-(--line-soft)">
           {VOCAB.map((term) => (
             <li key={term} className="flex items-center gap-4 py-3">
               <span className="w-28 shrink-0 rounded-full px-2.5 py-1 text-center text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(term === "read" ? "green" : term === "write" ? "pending" : "red")}>
                 {term}
               </span>
-              <span className="min-w-0 flex-1 text-[13px] font-medium text-[#F5F5F5]">
+              <span className="min-w-0 flex-1 text-[13px] font-medium text-(--text)">
                 {vocabHelp[term]}
-                <small className="block text-[12px] font-normal tabular-nums text-[#A3A3A3]">
+                <small className="block text-[12px] font-normal tabular-nums text-(--muted)">
                   dev: {CENTRAL_TABLE[`${term}:development`]} · test: {CENTRAL_TABLE[`${term}:test`]} · staging: {CENTRAL_TABLE[`${term}:staging`]} · prod: {CENTRAL_TABLE[`${term}:production`]}
                 </small>
               </span>
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-[12px] leading-[1.6] text-[#A3A3A3]">Unmapped terms fail closed to denied — never silently allowed.</p>
+        <p className="mt-3 text-[12px] leading-[1.6] text-(--muted)">Unmapped terms fail closed to denied — never silently allowed.</p>
         </div>
       </details>
       <Card className="flex max-h-[620px] min-h-[360px] flex-col overflow-hidden">
         <CardHeading eyebrow="Per-binding rules" title="Service rules — most specific wins" />
-        <p className="mb-2 shrink-0 text-[12px] leading-[1.6] text-[#A3A3A3]">Hidden in this build — rule selects are disabled and write nothing. Values below are what is stored.</p>
-        <ul className="min-h-0 flex-1 divide-y divide-[#2B2B2B] overflow-y-auto">
+        <p className="mb-2 shrink-0 text-[12px] leading-[1.6] text-(--muted)">Hidden in this build — rule selects are disabled and write nothing. Values below are what is stored.</p>
+        <ul className="min-h-0 flex-1 divide-y divide-(--line-soft) overflow-y-auto">
           {projects.flatMap((item) => (item.connections ?? []).map((connection) => ({ item, connection }))).map(({ item, connection }) => {
             const current = connection.serviceOverride ?? connection.override ?? "";
             const effective = resolveOverride({ serviceOverride: current || null, tagOverride: connection.tagOverride ?? null, default: "review-each-time" });
             return (
               <li key={connection.id} className="flex flex-wrap items-center gap-3 py-3">
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-[#F5F5F5]">
+                <span className="min-w-0 flex-1 text-[13px] font-medium text-(--text)">
                   {item.name} · {connection.provider} → {connection.resource ?? connection.target}
-                  <small className="block text-[12px] font-normal tabular-nums text-[#A3A3A3]">
+                  <small className="block text-[12px] font-normal tabular-nums text-(--muted)">
                     now: {effective.override === "auto-approve" ? "allowed without asking (still logged)" : effective.override === "always-block" ? "refused — stays connected" : "asks each time"}
                   </small>
                 </span>
@@ -2213,22 +2094,22 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
             );
           })}
         </ul>
-        <p className="mt-3 shrink-0 text-[12px] leading-[1.6] text-[#A3A3A3]">
+        <p className="mt-3 shrink-0 text-[12px] leading-[1.6] text-(--muted)">
           Refusing never disconnects the binding — it just says no to that one call. Allowing without asking still writes every call to the audit log. Source: service rule beats tag and default rules.
         </p>
       </Card>
       </div>
       <div className="app-column flex min-h-0 flex-col gap-6 overflow-visible lg:h-full">
-      <details className="shrink-0 rounded-[10px] border border-[#333333] bg-[#212121] px-6 py-4">
-        <summary className="cursor-pointer text-[13px] font-semibold text-[#F5F5F5]">How overrides resolve (reference)</summary>
+      <details className="nx-card shrink-0 !py-3">
+        <summary className="cursor-pointer text-[13px] font-semibold text-(--text)">How overrides resolve (reference)</summary>
         <div className="max-h-[30vh] overflow-y-auto pt-2">
-        <ol className="divide-y divide-[#2B2B2B]">
+        <ol className="divide-y divide-(--line-soft)">
           {(["service", "tag", "default"] as const).map((level, i) => (
             <li key={level} className="flex items-center gap-4 py-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-semibold tabular-nums text-[#A3A3A3]">{i + 1}</span>
-              <span className="min-w-0 flex-1 text-[13px] font-medium capitalize text-[#F5F5F5]">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--raised) text-[11px] font-semibold tabular-nums text-(--muted)">{i + 1}</span>
+              <span className="min-w-0 flex-1 text-[13px] font-medium capitalize text-(--text)">
                 {level}
-                <small className="block text-[12px] font-normal normal-case tabular-nums text-[#A3A3A3]">
+                <small className="block text-[12px] font-normal normal-case tabular-nums text-(--muted)">
                   {level === "service" ? "Highest precedence — one service only" : level === "tag" ? "Middle — a group of services" : `Fallback — currently ${exampleOverride.override} → ${exampleOverride.decision}`}
                 </small>
               </span>
@@ -2240,7 +2121,7 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
             </li>
           ))}
         </ol>
-        <p className="mt-3 text-[12px] leading-[1.6] text-[#A3A3A3]">
+        <p className="mt-3 text-[12px] leading-[1.6] text-(--muted)">
           A block decision never tears down the connection. Auto-approve is still audited. Source: {exampleOverride.source}.
         </p>
         </div>
@@ -2253,12 +2134,12 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
         {recentBlocks.length > 0 && (
           <div className="flex max-h-[220px] flex-col gap-2 overflow-y-auto">{recentBlocks.map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} />)}</div>
         )}
-        {!desktop && <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">The browser preview cannot read workspace files. Enforcement itself happens in the MCP bridge regardless.</p>}
+        {!desktop && <p className="text-[13px] leading-[1.6] text-(--muted)">The browser preview cannot read workspace files. Enforcement itself happens in the MCP bridge regardless.</p>}
         {desktop && loaded && recentBlocks.length === 0 && (
-          <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">Nothing blocked. Every mediated call so far was allowed or denied.</p>
+          <p className="text-[13px] leading-[1.6] text-(--muted)">Nothing blocked. Every mediated call so far was allowed or denied.</p>
         )}
       </Card>
-      <Note><strong className="font-semibold text-[#F5F5F5]">Unmanaged is not protected.</strong> Direct provider CLIs, direct MCP connections, or browser actions outside Nexus are not visible here.</Note>
+      <Note><strong className="font-semibold text-(--text)">Unmanaged is not protected.</strong> Direct provider CLIs, direct MCP connections, or browser actions outside Nexus are not visible here.</Note>
       </div>
       </div>
     </div>
@@ -2268,93 +2149,102 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
 function ActivityView({ projects, errorLog, onClearErrors, onRetryError }: { projects: Project[]; errorLog: ErrorRecord[]; onClearErrors: () => void; onRetryError: (record: ErrorRecord) => void }) {
   const { entries, loaded, busy, refresh } = useAuditLog(projects);
   const [filter, setFilter] = useState("");
+  const [decisionFilter, setDecisionFilter] = useState<"all" | "allowed" | "blocked">("all");
   const desktop = desktopAvailable();
   const query = filter.trim().toLowerCase();
-  const matching = (entry: AuditEntry) => !query || [entry.agent, entry.project, entry.environment, entry.provider, entry.resource, entry.operation, entry.decision, entry.reason, entry.session].some((field) => (field ?? "").toLowerCase().includes(query));
+  const matching = (entry: AuditEntry) => {
+    if (decisionFilter === "allowed" && entry.decision !== "allow") return false;
+    if (decisionFilter === "blocked" && entry.decision === "allow") return false;
+    return !query || [entry.agent, entry.project, entry.environment, entry.provider, entry.resource, entry.operation, entry.decision, entry.reason, entry.session].some((field) => (field ?? "").toLowerCase().includes(query));
+  };
   const recent = entries.filter(matching).slice(-50).reverse();
   const errors = [...errorLog].reverse();
+  const allowedCount = entries.filter((e) => e.decision === "allow").length;
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
       <PageTitle
-        eyebrow="Monitor"
-        title="Activity"
-        description="Record of what Nexus handled: session, project, resource, operation, decision. No secrets."
-        action={<button type="button" onClick={() => void refresh()} disabled={busy} className={secondaryBtn}>{busy ? "Refreshing…" : "Refresh"}</button>}
+        description="A record of what Nexus handled: session, project, resource, operation and decision. No secrets."
+        action={<Button size="sm" variant="outline" isDisabled={busy} onPress={() => void refresh()}><NxIcon name="refresh" size={15} />{busy ? "Refreshing…" : "Refresh"}</Button>}
       />
       {desktop && entries.length > 0 && (
-        <div className="shrink-0">
-          <input value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter activity" placeholder="Filter by project, operation, decision…" className={inputClass} style={{ maxWidth: 340 }} />
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <Segmented label="Decision filter" value={decisionFilter} onChange={setDecisionFilter} options={[{ value: "all", label: `All ${entries.length}` }, { value: "allowed", label: `Allowed ${allowedCount}` }, { value: "blocked", label: `Blocked ${entries.length - allowedCount}` }]} />
+          <label className="flex min-w-[240px] items-center gap-2 rounded-[10px] border border-(--line) bg-(--panel) px-3 py-2 text-(--muted)">
+            <NxIcon name="search" size={15} />
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter activity" placeholder="Project, operation, reason…" className="min-w-0 flex-1 bg-transparent text-[13px] text-(--text) outline-none placeholder:text-(--muted-2)" />
+          </label>
         </div>
       )}
-      <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
-      <Card className="flex min-h-0 flex-[1.4] flex-col overflow-hidden lg:h-full">
-        <CardHeading eyebrow="Activity log" title={!desktop ? "Desktop only" : !loaded ? "Loading" : recent.length === 0 ? "No recorded activity" : `${recent.length} recent decision${recent.length === 1 ? "" : "s"}`} />
-        {!loaded && desktop ? (
-          <ul className="flex flex-col gap-2" aria-label="Loading activity">
-            {[0, 1, 2, 3].map((i) => <li key={i} className="h-[52px] animate-pulse rounded-[8px] bg-[#262626]" />)}
-          </ul>
-        ) : recent.length > 0 ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">{recent.map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} />)}</div>
-        ) : (
-          <div className="py-8 text-center">
-            <p className="mx-auto max-w-[440px] font-serif text-[22px] leading-[1.3] tracking-[-0.02em]" style={{ fontFamily: "Georgia, 'Newsreader', serif" }}>
-              {query ? "No decisions match that filter." : "No activity recorded."}
-            </p>
-            <p className="mx-auto mt-2 max-w-[440px] text-[13px] leading-[1.6] text-[#A3A3A3]">
-              {!desktop ? "Open the desktop app to read the local activity log. Nexus does not track commands run outside the app." : query ? `No decisions match “${filter.trim()}”. Clear the filter to see everything.` : "No agent has used Nexus yet. Nexus does not track commands run outside the app."}
-            </p>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1.5fr_1fr]">
+        <Card flush className="flex min-h-[280px] flex-col lg:max-h-[640px]">
+          <div className="px-5 pt-4"><CardHeading eyebrow="Activity log" title={!desktop ? "Desktop only" : !loaded ? "Loading" : recent.length === 0 ? "No recorded activity" : `${recent.length} recent decision${recent.length === 1 ? "" : "s"}`} /></div>
+          {!loaded && desktop ? (
+            <ul className="flex flex-col gap-2 px-5 pb-5" aria-label="Loading activity">
+              {[0, 1, 2, 3].map((i) => <li key={i} className="h-[52px] animate-pulse rounded-[10px] bg-(--raised)" />)}
+            </ul>
+          ) : recent.length > 0 ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{recent.map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} inset />)}</div>
+          ) : (
+            <Empty title={query || decisionFilter !== "all" ? "No decisions match that filter" : "No activity recorded"}>
+              {!desktop ? "Open the desktop app to read the local activity log. Nexus does not track commands run outside the app." : query || decisionFilter !== "all" ? "Clear the filter to see everything." : "No agent has used Nexus yet. Connect one from Agents and its calls will show up here."}
+            </Empty>
+          )}
+        </Card>
+        <Card flush className="flex min-h-[200px] flex-col lg:max-h-[640px]">
+          <div className="px-5 pt-4">
+            <CardHeading
+              eyebrow="App errors"
+              title={errors.length === 0 ? "No errors kept" : `${errors.length} kept`}
+              action={errors.length > 0 ? <Button size="sm" variant="ghost" onPress={onClearErrors}>Clear</Button> : undefined}
+            />
           </div>
-        )}
-      </Card>
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden lg:h-full">
-        <CardHeading
-          eyebrow="App errors"
-          title={errors.length === 0 ? "No errors kept" : `${errors.length} kept`}
-          action={errors.length > 0 ? <button type="button" onClick={onClearErrors} className={smallBtn}>Clear</button> : undefined}
-        />
-        {errors.length > 0 ? (
-          <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-            {errors.map((record) => (
-              <li key={record.id} className="flex items-center gap-4 rounded-[8px] border border-[#333333] px-3 py-2.5">
-                <span className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle("red")}>Failed</span>
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-[#F5F5F5]">
-                  {record.where}
-                  <small className="block truncate text-[12px] font-normal tabular-nums text-[#A3A3A3]">{record.message}</small>
-                  {record.debug && <small className="block truncate font-mono text-[11px] tabular-nums text-[#737373]" title="Error class for debugging (no secrets)">{record.debug}</small>}
-                </span>
-                <span className="flex max-w-[380px] shrink-0 flex-col items-end gap-1">
-                  <small className="text-right text-[11px] tabular-nums text-[#737373]" title={new Date(record.ts).toLocaleString()}>{timeAgo(record.ts)}</small>
-                  {record.retry && <button type="button" onClick={() => onRetryError(record)} className={smallBtn}>Retry</button>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-[13px] leading-[1.6] text-[#A3A3A3]">Failures to save, link, or remove stay here with what to retry. Nothing has failed yet.</p>
-        )}
-      </Card>
+          {errors.length > 0 ? (
+            <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              {errors.map((record) => (
+                <li key={record.id} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                  <span className="nx-tile" data-tone="danger"><NxIcon name="alert" size={16} /></span>
+                  <span className="nx-row-body">
+                    <span className="nx-row-title">{record.where}</span>
+                    <span className="nx-row-sub" style={{ whiteSpace: "normal" }}>{record.message}</span>
+                    {record.debug && <span className="nx-row-sub nx-mono" title="Error class for debugging (no secrets)">{record.debug}</span>}
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="nx-mono nx-muted" title={new Date(record.ts).toLocaleString()}>{timeAgo(record.ts)}</span>
+                    {record.retry && <Button size="sm" variant="outline" onPress={() => onRetryError(record)}>Retry</Button>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="px-5 pb-5 text-[13px] leading-[1.6] text-(--muted)">Failures to save, link, or remove stay here with what to retry. Nothing has failed yet.</p>
+          )}
+        </Card>
       </div>
     </div>
   );
 }
 
-function AuditRow({ entry }: { entry: AuditEntry }) {
+function AuditRow({ entry, inset = false }: { entry: AuditEntry; inset?: boolean }) {
   const when = timeAgo(entry.ts);
   const full = entry.ts ? new Date(entry.ts).toLocaleString() : "Unknown time";
   // Paper: approval_required reads as denied (Blocked/denied wording).
   const decision = entry.decision === "approval_required" ? "denied" : (entry.decision ?? "unknown");
+  const state: StepState = decision === "allow" ? "done" : decision === "block" ? "failed" : "skipped";
+  const tone: Tone = decision === "allow" ? "success" : decision === "block" ? "danger" : "warning";
   return (
-    <div className="flex items-center gap-4 rounded-[8px] border border-[#333333] px-3 py-2.5 transition-[transform,opacity] duration-200">
-      <span className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(decision === "allow" ? "green" : decision === "denied" ? "pending" : decision === "block" ? "red" : "default")}>
-        {decision}
+    <div className="nx-row" style={inset ? undefined : { paddingInline: 0 }}>
+      <span className="nx-check" data-state={state} aria-label={decision}>
+        {state === "done" && <NxIcon name="check" size={13} />}
+        {state === "failed" && <NxIcon name="x" size={13} />}
       </span>
-      <span className="min-w-0 flex-1 text-[13px] font-medium tabular-nums text-[#F5F5F5]">
-        {entry.operation ?? "unknown operation"}
-        <small className="block truncate text-[12px] font-normal text-[#A3A3A3]">{entry.agent ? `${agentDisplayName(entry.agent)} · ` : ""}{projectDisplayName(entry.project)} · {entry.environment ?? "?"} · {entry.resource ?? entry.provider ?? "?"}</small>
+      <span className="nx-row-body">
+        <span className="nx-row-title">{entry.operation ?? "unknown operation"}</span>
+        <span className="nx-row-sub">{entry.agent ? `${agentDisplayName(entry.agent)} · ` : ""}{projectDisplayName(entry.project)} · {entry.environment ?? "?"} · {entry.resource ?? entry.provider ?? "?"}</span>
+        {entry.reason && <span className="nx-row-sub" style={{ whiteSpace: "normal" }}>{entry.reason}</span>}
       </span>
-      <span className="flex max-w-[380px] shrink-0 flex-col items-end gap-0.5">
-        <small className="text-right text-[11px] tabular-nums text-[#737373]" title={full}>{when}</small>
-        {entry.reason && <small className="line-clamp-2 text-right text-[11px] text-[#737373]">{entry.reason}</small>}
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <Badge tone={tone}>{decision}</Badge>
+        <span className="nx-mono nx-muted" title={full}>{when}</span>
       </span>
     </div>
   );
@@ -2396,43 +2286,42 @@ function SettingsView({ projects, savedKeys, vaultUnlocked, onUnlocked, onLocked
   const desktop = desktopAvailable();
 
   return (
-    <div className="app-view mx-auto flex h-full min-h-0 w-full max-w-[1200px] flex-1 flex-col gap-6 overflow-visible">
-      <PageTitle eyebrow="System" title="Settings" description="Keep publishable keys separate from project details." />
-      <Card className="flex max-h-full min-h-0 max-w-[580px] shrink-0 flex-col overflow-y-auto">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">Desktop vault</p>
-        <h2 className="mt-2 text-[19px] font-semibold tracking-[-0.01em] text-[#F5F5F5]">
-          {!desktop ? "Open Nexus Guard on your desktop" : vaultUnlocked ? "Vault unlocked" : "Unlock or create your vault"}
-        </h2>
-        <p className="mt-2 max-w-[65ch] text-[13px] leading-[1.6] text-[#A3A3A3]">
-          {!desktop ? "This browser preview never accepts or stores keys. Use the desktop app to manage them." : vaultUnlocked ? "Your secure system keychain is ready. Keys are kept out of project files." : "Enter a password with at least 12 characters to unlock this app session."}
-        </p>
-        {desktop && !vaultUnlocked && (
-          <form className="mt-4 flex flex-col gap-3" onSubmit={submit}>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Vault password</span>
-              <input type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} minLength={12} required placeholder="At least 12 characters" className={inputClass} />
-            </label>
-            {message && <p className="text-[12px] text-[#F08A80]" role="alert">{message}</p>}
-            <button type="submit" disabled={busy || password.length < 12} className={primaryBtn} style={{ alignSelf: "flex-start" }}>
-              {busy ? "Opening vault…" : "Open vault"}
-            </button>
-          </form>
-        )}
-        {desktop && vaultUnlocked && (
-          <div className="mt-4">
-            <button type="button" onClick={() => void lock()} disabled={busy} className={secondaryBtn}>{busy ? "Locking…" : "Lock vault"}</button>
-          </div>
-        )}
-        {message && vaultUnlocked && <p className="mt-2 text-[12px] text-[#F08A80]" role="alert">{message}</p>}
-        {desktop && vaultUnlocked && <VaultItems projects={projects} savedKeys={savedKeys} />}
-      </Card>
+    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
+      <PageTitle description="Appearance, the desktop vault, and local data." />
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeading eyebrow="Appearance" title="Theme" />
+          <p className="mb-3 text-[13px] leading-[1.6] text-(--muted)">System follows your operating system. Your choice is remembered on this device.</p>
+          <ThemeToggle />
+        </Card>
+        <Card>
+          <CardHeading eyebrow="Desktop vault" title={!desktop ? "Open Nexus Guard on your desktop" : vaultUnlocked ? "Vault unlocked" : "Unlock or create your vault"} action={desktop ? <Badge tone={vaultUnlocked ? "success" : "warning"} dot>{vaultUnlocked ? "Unlocked" : "Locked"}</Badge> : undefined} />
+          <p className="max-w-[65ch] text-[13px] leading-[1.6] text-(--muted)">
+            {!desktop ? "This browser preview never accepts or stores keys. Use the desktop app to manage them." : vaultUnlocked ? "Your secure system keychain is ready. Keys are kept out of project files." : "Enter a password with at least 12 characters to unlock your vault, or to create it the first time."}
+          </p>
+          {desktop && !vaultUnlocked && (
+            <form className="mt-4 flex flex-col gap-3" onSubmit={submit}>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[12px] font-medium text-(--text)">Vault password</span>
+                <input type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} minLength={12} required placeholder="At least 12 characters" className={inputClass} />
+              </label>
+              {message && <p className="text-[12px] text-(--red)" role="alert">{message}</p>}
+              <Button type="submit" size="sm" isDisabled={busy || password.length < 12} className="self-start">{busy ? "Opening vault…" : "Open vault"}</Button>
+            </form>
+          )}
+          {desktop && vaultUnlocked && (
+            <div className="mt-4"><Button size="sm" variant="outline" isDisabled={busy} onPress={() => void lock()}>{busy ? "Locking…" : "Lock vault"}</Button></div>
+          )}
+          {message && vaultUnlocked && <p className="mt-2 text-[12px] text-(--red)" role="alert">{message}</p>}
+          {desktop && vaultUnlocked && <VaultItems projects={projects} savedKeys={savedKeys} />}
+        </Card>
+      </div>
       <Card className="shrink-0">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">Danger zone</p>
-        <h2 className="mt-2 text-[19px] font-semibold tracking-[-0.01em] text-[#F5F5F5]">Reset local data</h2>
-        <p className="mt-2 max-w-[65ch] text-[13px] leading-[1.6] text-[#A3A3A3]">
+        <CardHeading eyebrow="Danger zone" title="Reset local data" />
+        <p className="max-w-[65ch] text-[13px] leading-[1.6] text-(--muted)">
           Projects, setup progress, and the kept error log return to starter examples. Folders on disk and OS-keychain approvals are untouched.
         </p>
-        <button type="button" onClick={onReset} className={`${dangerBtn} mt-4`}>Reset local data</button>
+        <Button size="sm" variant="danger-soft" className="mt-4" onPress={onReset}>Reset local data</Button>
       </Card>
     </div>
   );
@@ -2446,20 +2335,20 @@ function VaultItems({ projects, savedKeys }: { projects: Project[]; savedKeys: R
     return [{ project: item.name, service: connection.provider, target: connection.target, kind: publishable ? "Publishable key" : "MCP approval" }];
   }));
   return (
-    <div className="mt-6 border-t border-[#333333] pt-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#737373]">Stored items</p>
+    <div className="mt-5 border-t border-(--line-soft) pt-4">
+      <span className="nx-eyebrow">Stored items</span>
       {items.length === 0 ? (
-        <p className="mt-2 text-[13px] text-[#A3A3A3]">No keys or approvals are saved yet.</p>
+        <p className="mt-2 text-[13px] text-(--muted)">No keys or approvals are saved yet.</p>
       ) : (
-        <ul className="mt-2 flex max-h-[280px] flex-col gap-2 overflow-y-auto">
+        <ul className="mt-2 flex max-h-[280px] flex-col overflow-y-auto">
           {items.map((item) => (
-            <li key={`${item.project}-${item.service}-${item.kind}`} className="flex items-center gap-2.5 rounded-[8px] border border-[#333333] px-3 py-2.5">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[#1C2E23] text-[#6FCE97]"><Icon name="shield" /></span>
-              <span className="min-w-0 flex-1">
-                <strong className="block truncate text-[12px] font-semibold text-[#F5F5F5]">{item.service} · {item.project}</strong>
-                <small className="block truncate text-[11px] tabular-nums text-[#A3A3A3]">{item.kind} · {item.target}</small>
+            <li key={`${item.project}-${item.service}-${item.kind}`} className="nx-row" style={{ paddingInline: 0 }}>
+              <span className="nx-tile" data-tone="success"><NxIcon name="key" size={16} /></span>
+              <span className="nx-row-body">
+                <span className="nx-row-title">{item.service} · {item.project}</span>
+                <span className="nx-row-sub">{item.kind} · {item.target}</span>
               </span>
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-[#6FCE97]"><StatusDot tone="green" /> Saved</span>
+              <Badge tone="success" dot>Saved</Badge>
             </li>
           ))}
         </ul>
@@ -2550,19 +2439,19 @@ function AddProjectModal({ onClose, onSave, existingNames }: { onClose: () => vo
     <Modal title="Add a project" description="Tell Nexus where this project lives. Repo and branch fill in from the folder by themselves." onClose={onClose}>
       <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (canSave) onSave({ name: name.trim(), path: path.trim(), repo: repo.trim(), branch: branch.trim() || "main", environment: environment || undefined }); }}>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Project name</span>
+          <span className="text-[12px] font-medium text-(--text)">Project name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="For example, Koupa" autoFocus className={inputClass} required />
-          {nameUsed ? <span className="text-[12px] text-[#F08A80]" role="alert">A project with this name already exists. Choose another name.</span> : null}
+          {nameUsed ? <span className="text-[12px] text-(--red)" role="alert">A project with this name already exists. Choose another name.</span> : null}
         </label>
         <div className="flex items-end gap-2">
           <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Project folder</span>
+            <span className="text-[12px] font-medium text-(--text)">Project folder</span>
             <input value={path} onChange={(e) => pickPath(e.target.value)} placeholder="~/Projects/Koupa" className={inputClass} required />
           </label>
           {desktop && <button type="button" onClick={() => void browseFolder()} disabled={busyPick} className={secondaryBtn}>{busyPick ? "…" : "Browse"}</button>}
         </div>
         {desktop && path.trim() && (
-          <p className="flex flex-wrap items-center gap-2 text-[12px] tabular-nums text-[#A3A3A3]">
+          <p className="flex flex-wrap items-center gap-2 text-[12px] tabular-nums text-(--muted)">
             <StatusDot tone={checking ? "blue" : inspection ? (inspection.exists && inspection.is_dir ? "green" : "orange") : "orange"} />
             {checking ? "Checking folder…" : inspection ? (inspection.exists && inspection.is_dir
               ? `Folder found${inspection.git_branch ? ` · git: ${inspection.git_branch}` : " · no git — manifest only"}${inspection.nexus_project ? ` · already registered as ${inspection.nexus_project}` : ""}`
@@ -2573,21 +2462,21 @@ function AddProjectModal({ onClose, onSave, existingNames }: { onClose: () => vo
           </p>
         )}
         {!desktop && <Note>Open the desktop app and Nexus checks the folder for you.</Note>}
-        {inspection?.nexus_project && <p className="text-[12px] text-[#F08A80]" role="alert">This folder already belongs to “{inspection.nexus_project}”. Pick another folder or remove it there first.</p>}
-        {error && <p className="text-[12px] text-[#F08A80]" role="alert">{error}</p>}
-        <details className="rounded-[8px] border border-[#333333] px-3 py-2">
-          <summary className="cursor-pointer text-[12px] text-[#A3A3A3]">Repo, branch, environment (auto-detected)</summary>
+        {inspection?.nexus_project && <p className="text-[12px] text-(--red)" role="alert">This folder already belongs to “{inspection.nexus_project}”. Pick another folder or remove it there first.</p>}
+        {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
+        <details className="rounded-[8px] border border-(--line) px-3 py-2">
+          <summary className="cursor-pointer text-[12px] text-(--muted)">Repo, branch, environment (auto-detected)</summary>
           <div className="grid gap-3 py-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Git repository</span>
+              <span className="text-[12px] font-medium text-(--text)">Git repository</span>
               <input value={repo} onChange={(e) => { setRepo(e.target.value); setRepoAuto(false); }} placeholder="Detected from folder" className={inputClass} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Branch</span>
+              <span className="text-[12px] font-medium text-(--text)">Branch</span>
               <input value={branch} onChange={(e) => { setBranch(e.target.value); setBranchAuto(false); }} placeholder="main" className={inputClass} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Environment</span>
+              <span className="text-[12px] font-medium text-(--text)">Environment</span>
               <select value={environment} onChange={(e) => setEnvironment(e.target.value)} className={selectClass}>
                 <option value="">Auto from branch</option>
                 <option value="development">Development</option>
@@ -2598,7 +2487,7 @@ function AddProjectModal({ onClose, onSave, existingNames }: { onClose: () => vo
           </div>
         </details>
         <Note>Only project information is saved. No passwords are requested here.</Note>
-        <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
           <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
           <button type="submit" disabled={!canSave} className={primaryBtn}>Save project</button>
         </div>
@@ -2630,35 +2519,35 @@ function EditProjectModal({ project, onClose, onSave, existingNames }: { project
     <Modal title={`Edit ${project.name}`} description="Rename, move, or retarget this project. Agents resolve the new details after you re-verify the folder." onClose={onClose}>
       <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (canSave) onSave({ name: name.trim(), path: path.trim(), repo: repo.trim(), branch: branch.trim() || "main", environment }); }}>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Project name</span>
+          <span className="text-[12px] font-medium text-(--text)">Project name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} autoFocus className={inputClass} required />
-          {nameUsed ? <span className="text-[12px] text-[#F08A80]" role="alert">Another project already uses this name. Choose another name.</span> : null}
+          {nameUsed ? <span className="text-[12px] text-(--red)" role="alert">Another project already uses this name. Choose another name.</span> : null}
         </label>
         <div className="flex items-end gap-2">
           <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Project folder</span>
+            <span className="text-[12px] font-medium text-(--text)">Project folder</span>
             <input value={path} onChange={(e) => setPath(e.target.value)} className={inputClass} required />
           </label>
           {desktopAvailable() && <button type="button" onClick={() => void browse()} className={secondaryBtn}>Browse</button>}
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Git repository</span>
+            <span className="text-[12px] font-medium text-(--text)">Git repository</span>
             <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="github.com/you/repo" className={inputClass} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Branch</span>
+            <span className="text-[12px] font-medium text-(--text)">Branch</span>
             <input value={branch} onChange={(e) => setBranch(e.target.value)} className={inputClass} />
           </label>
         </div>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Environment</span>
+          <span className="text-[12px] font-medium text-(--text)">Environment</span>
           <select value={environment} onChange={(e) => setEnvironment(e.target.value)} className={selectClass}>
             {environments.map((env) => <option key={env} value={env}>{env[0].toUpperCase() + env.slice(1)}</option>)}
           </select>
         </label>
         <Note>Only project information is saved. Saved approvals stay linked by their IDs.</Note>
-        <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
           <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
           <button type="submit" disabled={!canSave} className={primaryBtn}>Save changes</button>
         </div>
@@ -2691,13 +2580,13 @@ function EditConnectionModal({ connection, accounts, onClose, onSave, onOpenServ
     <Modal title={`Edit ${connection.provider} connection`} description={locked ? "Label, login, and color — the approved ref and URL stay exactly as Supabase issued them. To change projects, remove and reconnect." : "Update how Nexus labels and reaches this resource."} onClose={onClose}>
       <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (canSave) onSave({ target: target.trim(), detail: detail.trim() || connection.detail, tone, projectRef: projectRef.trim() || undefined, url: url.trim() || undefined, accountId: accountForSave }); }}>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Display name</span>
+          <span className="text-[12px] font-medium text-(--text)">Display name</span>
           <input value={target} onChange={(e) => setTarget(e.target.value)} autoFocus className={inputClass} required />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Account (from Services)</span>
+          <span className="text-[12px] font-medium text-(--text)">Account (from Services)</span>
           {matchingAccounts.length === 0 && (
-            <small className="flex flex-wrap items-center gap-2 text-[12px] leading-[1.6] text-[#A3A3A3]">
+            <small className="flex flex-wrap items-center gap-2 text-[12px] leading-[1.6] text-(--muted)">
               <span>No {connection.provider} account linked yet — link one under Services first, then pick it here. Saving “Not linked” clears the account.</span>
               {onOpenServices && <button type="button" onClick={onOpenServices} className={smallBtn}>Open Services</button>}
             </small>
@@ -2711,28 +2600,28 @@ function EditConnectionModal({ connection, accounts, onClose, onSave, onOpenServ
         {!locked && connection.provider === "Supabase" && (
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Project reference</span>
+              <span className="text-[12px] font-medium text-(--text)">Project reference</span>
               <input value={projectRef} onChange={(e) => setProjectRef(e.target.value)} className={inputClass} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">Project URL</span>
+              <span className="text-[12px] font-medium text-(--text)">Project URL</span>
               <input value={url} onChange={(e) => setUrl(e.target.value)} className={inputClass} />
             </label>
           </div>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">What it provides</span>
+            <span className="text-[12px] font-medium text-(--text)">What it provides</span>
             <input value={detail} onChange={(e) => setDetail(e.target.value)} className={inputClass} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Color</span>
+            <span className="text-[12px] font-medium text-(--text)">Color</span>
             <select value={tone} onChange={(e) => setTone(e.target.value as Connection["tone"])} className={selectClass}>
               {tones.map((toneOption) => <option key={toneOption} value={toneOption}>{toneOption[0].toUpperCase() + toneOption.slice(1)}</option>)}
             </select>
           </label>
         </div>
-        <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
           <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
           <button type="submit" disabled={!canSave} className={primaryBtn}>Save changes</button>
         </div>
@@ -2855,15 +2744,15 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
     <Modal title={`Add a connection to ${projectName}`} description="Choose how Nexus should connect to this service." onClose={method === "mcp" ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose}>
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Service</span>
+          <span className="text-[12px] font-medium text-(--text)">Service</span>
           <select value={provider} onChange={(e) => changeProvider(e.target.value)} disabled={method === "mcp" && mcpPhase === "pick"} className={selectClass}>
             {services.map((service) => <option key={service} value={service}>{service}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium text-[#F5F5F5]">Account (from Services)</span>
+          <span className="text-[12px] font-medium text-(--text)">Account (from Services)</span>
           {matchingAccounts.length === 0 ? (
-            <small className="flex flex-wrap items-center gap-2 text-[12px] leading-[1.6] text-[#A3A3A3]">
+            <small className="flex flex-wrap items-center gap-2 text-[12px] leading-[1.6] text-(--muted)">
               <span>No {provider} account linked yet — link one under Services first, then pick it here. Saving now stores the binding without an account.</span>
               {onOpenServices && <button type="button" onClick={onOpenServices} className={smallBtn}>Open Services</button>}
             </small>
@@ -2879,26 +2768,26 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
             <button
               type="button"
               onClick={() => setMethod("manual")}
-              className="flex min-h-[150px] cursor-pointer flex-col items-start gap-2 rounded-[10px] border border-[#333333] bg-[#212121] p-4 text-left transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:border-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]"
+              className="flex min-h-[150px] cursor-pointer flex-col items-start gap-2 rounded-[10px] border border-(--line) bg-(--panel) p-4 text-left transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:border-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)"
             >
               <strong className="text-[13px] font-semibold">Add manually</strong>
-              <small className="text-[12px] leading-[1.6] text-[#A3A3A3]">Enter the project details and save a key in the desktop vault.</small>
+              <small className="text-[12px] leading-[1.6] text-(--muted)">Enter the project details and save a key in the desktop vault.</small>
               <span className="mt-auto pt-2 text-[12px] font-semibold">Choose manual →</span>
             </button>
             {provider === "Supabase" ? (
               <button
                 type="button"
                 onClick={() => setMethod("mcp")}
-                className="flex min-h-[150px] cursor-pointer flex-col items-start gap-2 rounded-[10px] border border-[#333333] bg-[#212121] p-4 text-left transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:border-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]"
+                className="flex min-h-[150px] cursor-pointer flex-col items-start gap-2 rounded-[10px] border border-(--line) bg-(--panel) p-4 text-left transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:border-(--text) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)"
               >
                 <strong className="text-[13px] font-semibold">Connect with MCP</strong>
-                <small className="text-[12px] leading-[1.6] text-[#A3A3A3]">Sign in in your browser, pick your project, done. No typing refs or URLs.</small>
+                <small className="text-[12px] leading-[1.6] text-(--muted)">Sign in in your browser, pick your project, done. No typing refs or URLs.</small>
                 <span className="mt-auto pt-2 text-[12px] font-semibold">Choose MCP →</span>
               </button>
             ) : (
-              <div className="flex min-h-[150px] flex-col items-start gap-2 rounded-[10px] border border-[#333333] bg-[#1A1A1A] p-4 opacity-70">
+              <div className="flex min-h-[150px] flex-col items-start gap-2 rounded-[10px] border border-(--line) bg-(--canvas) p-4 opacity-70">
                 <strong className="text-[13px] font-semibold">Connect with MCP</strong>
-                <small className="text-[12px] leading-[1.6] text-[#A3A3A3]">Browser approval is Supabase-only for now. {provider} saves as manual details.</small>
+                <small className="text-[12px] leading-[1.6] text-(--muted)">Browser approval is Supabase-only for now. {provider} saves as manual details.</small>
               </div>
             )}
           </div>
@@ -2907,28 +2796,28 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
           <>
             <button type="button" onClick={() => setMethod("choose")} className={ghostLink} style={{ alignSelf: "flex-start" }}>← Choose another method</button>
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-[#F5F5F5]">{isSupabase ? "Display name" : "Project or account name"}</span>
+              <span className="text-[12px] font-medium text-(--text)">{isSupabase ? "Display name" : "Project or account name"}</span>
               <input value={target} onChange={(e) => setTarget(e.target.value)} autoFocus placeholder={isSupabase ? "koupa-development" : "For example, koupa-auth"} className={inputClass} required />
             </label>
             {isSupabase && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[12px] font-medium text-[#F5F5F5]">Project reference</span>
+                  <span className="text-[12px] font-medium text-(--text)">Project reference</span>
                   <input value={projectRef} onChange={(e) => setProjectRef(e.target.value)} placeholder="abcdefghijklmnop" className={inputClass} required />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[12px] font-medium text-[#F5F5F5]">Project URL</span>
+                  <span className="text-[12px] font-medium text-(--text)">Project URL</span>
                   <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://...supabase.co" className={inputClass} required />
                 </label>
               </div>
             )}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-[#F5F5F5]">What it provides</span>
+                <span className="text-[12px] font-medium text-(--text)">What it provides</span>
                 <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="Database · Auth" className={inputClass} />
               </label>
               <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-[#F5F5F5]">Color</span>
+                <span className="text-[12px] font-medium text-(--text)">Color</span>
                 <select value={tone} onChange={(e) => setTone(e.target.value as Connection["tone"])} className={selectClass}>
                   {tones.map((toneOption) => <option key={toneOption} value={toneOption}>{toneOption[0].toUpperCase() + toneOption.slice(1)}</option>)}
                 </select>
@@ -2936,13 +2825,13 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
             </div>
             <Note>Only project details are saved now. Secret keys are never saved in the browser.</Note>
             {providerTier === "self-added" && (
-              <label className="flex cursor-pointer items-start gap-2.5 rounded-[8px] border border-[#333333] bg-[#1A1A1A] p-3 text-[12px] leading-[1.6] text-[#A3A3A3]">
-                <input type="checkbox" checked={selfAddedConfirm} onChange={(e) => setSelfAddedConfirm(e.target.checked)} className="mt-1 accent-[#F5F5F5]" />
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-[8px] border border-(--line) bg-(--canvas) p-3 text-[12px] leading-[1.6] text-(--muted)">
+                <input type="checkbox" checked={selfAddedConfirm} onChange={(e) => setSelfAddedConfirm(e.target.checked)} className="mt-1 accent-(--text)" />
                 <span>“{provider}” is unreviewed and fail-closed — agents get nothing from this binding until I explicitly allow calls.</span>
               </label>
             )}
-            {error && <p className="text-[12px] text-[#F08A80]" role="alert">{error}</p>}
-            <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+            {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
+            <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
               <button type="button" onClick={onClose} disabled={busy} className={secondaryBtn}>Cancel</button>
               <button type="button" onClick={saveManual} disabled={!canSaveManual || busy} className={primaryBtn}>Save project details</button>
             </div>
@@ -2951,8 +2840,8 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
         {method === "mcp" && mcpPhase === "auth" && (
           <>
             <button type="button" onClick={() => setMethod("choose")} className={ghostLink} style={{ alignSelf: "flex-start" }}>← Choose another method</button>
-            <div className="rounded-[8px] border border-[#333333] bg-[#1A1A1A] p-4 text-[12px] leading-[1.6] text-[#A3A3A3]">
-              <p className="mb-1 text-[13px] font-semibold text-[#F5F5F5]">Browser approval</p>
+            <div className="rounded-[8px] border border-(--line) bg-(--canvas) p-4 text-[12px] leading-[1.6] text-(--muted)">
+              <p className="mb-1 text-[13px] font-semibold text-(--text)">Browser approval</p>
               <p>Click below. Nexus opens Supabase in your browser — sign in, approve, then pick which of <em>your</em> projects links to {projectName}. Ref and URL fill in by themselves.</p>
               <ol className="mt-2 list-decimal pl-5 tabular-nums">
                 <li>Sign in to Supabase</li>
@@ -2960,8 +2849,8 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
                 <li>Pick your project here</li>
               </ol>
             </div>
-            {error && <p className="text-[12px] text-[#F08A80]" role="alert">{error}</p>}
-            <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+            {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
+            <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
               <button type="button" onClick={busy ? closeWhileAuthorizing : onClose} className={secondaryBtn}>Cancel</button>
               <button type="button" onClick={() => void authorize()} disabled={busy} className={primaryBtn}>{busy ? "Waiting for browser…" : "Connect in browser"}</button>
             </div>
@@ -2969,11 +2858,11 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
         )}
         {method === "mcp" && mcpPhase === "pick" && (
           <>
-            <div className="rounded-[8px] border border-[#333333] bg-[#1A1A1A] p-4 text-[12px] leading-[1.6] text-[#A3A3A3]">
-              <p className="mb-1 text-[13px] font-semibold text-[#F5F5F5]">Pick your Supabase project</p>
+            <div className="rounded-[8px] border border-(--line) bg-(--canvas) p-4 text-[12px] leading-[1.6] text-(--muted)">
+              <p className="mb-1 text-[13px] font-semibold text-(--text)">Pick your Supabase project</p>
               <p>Approval saved. Which project belongs to {projectName}?</p>
             </div>
-            {mcpListError && <p className="text-[12px] text-[#F08A80]" role="alert">{mcpListError} Enter the details manually — your approval is still saved.</p>}
+            {mcpListError && <p className="text-[12px] text-(--red)" role="alert">{mcpListError} Enter the details manually — your approval is still saved.</p>}
             {mcpProjects.length === 0 ? (
               <Note>No projects came back from Supabase. Enter the details manually instead.</Note>
             ) : (
@@ -2981,11 +2870,11 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
                 <legend className="sr-only">Supabase project</legend>
                 <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
                   {mcpProjects.map((p) => (
-                    <label key={p.ref} className="flex cursor-pointer items-center gap-3 rounded-[8px] border border-[#333333] px-3 py-2.5 transition-[transform,opacity] duration-200 hover:-translate-y-px" style={pickedRef === p.ref ? { borderColor: "#F5F5F5" } : undefined}>
-                      <input type="radio" name="supabase-project" value={p.ref} checked={pickedRef === p.ref} onChange={(e) => setPickedRef(e.target.value)} className="accent-[#F5F5F5]" />
+                    <label key={p.ref} className="flex cursor-pointer items-center gap-3 rounded-[8px] border border-(--line) px-3 py-2.5 transition-[transform,opacity] duration-200 hover:-translate-y-px" style={pickedRef === p.ref ? { borderColor: "var(--text)" } : undefined}>
+                      <input type="radio" name="supabase-project" value={p.ref} checked={pickedRef === p.ref} onChange={(e) => setPickedRef(e.target.value)} className="accent-(--text)" />
                       <span className="flex min-w-0 flex-col gap-0.5">
-                        <strong className="text-[13px] font-semibold text-[#F5F5F5]">{p.name}</strong>
-                        <small className="text-[11px] tabular-nums text-[#A3A3A3]">{p.ref}{p.region ? ` · ${p.region}` : ""}</small>
+                        <strong className="text-[13px] font-semibold text-(--text)">{p.name}</strong>
+                        <small className="text-[11px] tabular-nums text-(--muted)">{p.ref}{p.region ? ` · ${p.region}` : ""}</small>
                       </span>
                     </label>
                   ))}
@@ -2995,18 +2884,18 @@ function AddConnectionModal({ initialProvider, initialAccountId, projectId, proj
             {(mcpProjects.length === 0 || manualEntry) && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[12px] font-medium text-[#F5F5F5]">Project reference</span>
+                  <span className="text-[12px] font-medium text-(--text)">Project reference</span>
                   <input value={projectRef} onChange={(e) => { setProjectRef(e.target.value); setPickedRef(`manual:${e.target.value}`); }} placeholder="abcdefghijklmnop" className={inputClass} required />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[12px] font-medium text-[#F5F5F5]">Display name</span>
+                  <span className="text-[12px] font-medium text-(--text)">Display name</span>
                   <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="koupa-development" className={inputClass} required />
                 </label>
               </div>
             )}
             {mcpProjects.length > 0 && !manualEntry && <button type="button" onClick={() => setManualEntry(true)} className={ghostLink} style={{ alignSelf: "flex-start" }}>Can&apos;t find it? Enter details manually</button>}
-            {error && <p className="text-[12px] text-[#F08A80]" role="alert">{error}</p>}
-            <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+            {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
+            <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
               <button type="button" onClick={cancelAuthorize} disabled={busy} className={secondaryBtn}>Cancel</button>
               <button
                 type="button"
@@ -3068,11 +2957,11 @@ function PublishableKeyModal({ project, connection, saved, vaultUnlocked, onUnlo
       {desktop && !vaultUnlocked && (
         <form className="flex flex-col gap-4" onSubmit={unlockFirst}>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Vault password — unlocks here, no detour</span>
+            <span className="text-[12px] font-medium text-(--text)">Vault password — unlocks here, no detour</span>
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus autoComplete="off" placeholder="At least 12 characters" minLength={12} className={inputClass} required />
-            {message ? <span className="text-[12px] text-[#F08A80]" role="alert">{message}</span> : null}
+            {message ? <span className="text-[12px] text-(--red)" role="alert">{message}</span> : null}
           </label>
-          <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+          <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
             <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
             <button type="submit" disabled={busy || password.length < 12} className={primaryBtn}>{busy ? "Unlocking…" : "Unlock and continue"}</button>
           </div>
@@ -3081,12 +2970,12 @@ function PublishableKeyModal({ project, connection, saved, vaultUnlocked, onUnlo
       {desktop && vaultUnlocked && (
         <form className="flex flex-col gap-4" onSubmit={submit}>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-[#F5F5F5]">Supabase publishable key</span>
+            <span className="text-[12px] font-medium text-(--text)">Supabase publishable key</span>
             <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoFocus autoComplete="off" placeholder="sb_publishable_..." className={`${inputClass} font-mono`} />
-            {message ? <span className="text-[12px] text-[#F08A80]" role="alert">{message}</span> : null}
+            {message ? <span className="text-[12px] text-(--red)" role="alert">{message}</span> : null}
           </label>
           <Note>Do not enter a secret key, service-role key, database password, or personal access token.</Note>
-          <div className="flex justify-end gap-2 border-t border-[#333333] pt-4">
+          <div className="flex justify-end gap-2 border-t border-(--line) pt-4">
             {saved && <button type="button" onClick={() => void remove()} disabled={busy} className={dangerBtn}>Remove saved key</button>}
             <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
             <button type="submit" disabled={busy || !value.trim().startsWith("sb_publishable_")} className={primaryBtn}>{busy ? "Saving…" : saved ? "Replace key" : "Save key"}</button>
@@ -3106,24 +2995,18 @@ function Modal({ title, description, onClose, children }: { title: string; descr
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--backdrop, rgb(0 0 0 / 0.5))" }} role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[12px] border border-[#333333] bg-[#212121] p-6 shadow-[0_2px_8px_rgba(0,0,0,0.45)] sm:p-8"
+        className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[18px] border border-(--line) bg-(--panel) p-6"
+        style={{ boxShadow: "var(--shadow-pop)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-[18px] font-semibold tracking-[-0.02em] text-[#F5F5F5]">{title}</h2>
-            <p className="mt-1 text-[13px] leading-[1.6] text-[#A3A3A3]">{description}</p>
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-(--text)">{title}</h2>
+            <p className="mt-1 text-[13px] leading-[1.6] text-(--muted)">{description}</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-[6px] px-2 py-1 text-[16px] leading-none text-[#A3A3A3] transition-[transform,opacity] duration-200 hover:text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]"
-          >
-            ×
-          </button>
+          <Button isIconOnly size="sm" variant="ghost" aria-label="Close" onPress={onClose}><NxIcon name="x" size={16} /></Button>
         </div>
         {children}
       </div>
