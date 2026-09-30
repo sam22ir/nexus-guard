@@ -17,7 +17,7 @@
 
 | # | Item | Context |
 | --- | --- | --- |
-| 1 | **Blocking:** how Nexus learns each agent's working directory over one shared HTTP instance | Verify per agent. **Claude Code 2.1.284 verified 2026-09-30:** declares `roots` and answers `roots/list` with its launch directory; it sends no cwd header. Nexus now binds from a single root when no explicit workspace is sent, and refuses none/several/changed roots (`mcp/roots-fallback.test.mjs`). **Still unverified:** Codex, OpenCode, a full agent turn, and subdirectory launches |
+| 1 | **Blocking:** how Nexus learns each agent's working directory over one shared HTTP instance | Verify per agent. **Claude Code 2.1.284 verified 2026-09-30:** declares `roots` and answers `roots/list` with its launch directory; it sends no cwd header. Nexus now binds from a single root when no explicit workspace is sent, and refuses none/several/changed roots (`mcp/roots-fallback.test.mjs`). **OpenCode 2.0.19 verified 2026-09-30:** declares `roots` (without `listChanged`) and answers `roots/list` with its launch directory. **Codex 0.159.2 verified 2026-09-30:** does NOT declare `roots` (it answered an unsolicited `roots/list` with an empty list), so Nexus refuses it unless the workspace is pinned via `?workspace=` or `X-Nexus-Workspace`, as `.codex/config.toml` does. **Still unverified:** a full agent turn for any client, and subdirectory launches |
 | 2 | Stdio bridges: which side do they run on? | Agent→Nexus must be HTTP only; Nexus→provider stdio servers are allowed |
 | 3 | MCP availability per catalog entry, and an owner for maintenance | Every catalog service needs a working MCP server before it ships |
 
