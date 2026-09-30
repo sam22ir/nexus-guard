@@ -48,7 +48,7 @@ export function resolveWorkspace(req, url, defaultWorkspace = null) {
 }
 
 export const MISSING_WORKSPACE_REASON =
-  "Nexus does not know which project this request belongs to. Register Nexus in that project so the agent sends its workspace (X-Nexus-Workspace header or ?workspace=), then try again.";
+  "Nexus does not know which project this request belongs to. Register Nexus in that project so the agent sends its workspace (X-Nexus-Workspace header or ?workspace=), or use an agent that shares its workspace folder (MCP roots), then try again.";
 
 export const MISSING_SESSION_REASON =
   "Missing Nexus session. Mint one via POST /session with your workspace, then retry with X-Nexus-Session header.";
@@ -353,8 +353,11 @@ export function createNexusHttpServer({ defaultWorkspace = null, enforceVaultLoc
           return;
         }
         // A new server is about to be pinned, so the workspace must be known now.
+        // No explicit workspace: a client that declares MCP roots may be bound
+        // from them at its first tool call. Anything else is refused.
         const workspace = resolveWorkspace(req, url, pinnedDefault);
-        if (workspace == null) {
+        const rootsCapable = body?.method === "initialize" && body.params?.capabilities?.roots != null && typeof body.params.capabilities.roots === "object";
+        if (workspace == null && !rootsCapable) {
           sendMissingWorkspace(res);
           return;
         }

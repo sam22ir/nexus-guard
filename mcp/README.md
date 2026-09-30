@@ -74,6 +74,7 @@ Agents reach one persistent local Nexus over HTTP:
   Direct stdio bridges do not share this desktop lock state and bypass the
   lock entirely — stdio is archived (see appendix) and must not be used
   where lock enforcement matters.
+- Workspace discovery: an explicit `X-Nexus-Workspace` header or `?workspace=` always wins. Without one, a client that declares the MCP `roots` capability is bound at its first tool call from its single `file://` root; zero, several, or later-changed roots are refused, never guessed. Clients without roots must send the workspace. Under `requireSession` the agent still needs a session token, which is minted for a workspace.
 - Routing resolves the binding (provider→account→resource). Post-MVP Guard
   would decide the operation, never on a bare service name.
 

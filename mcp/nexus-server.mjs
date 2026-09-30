@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ListToolsRequestSchema, CallToolRequestSchema, ListRootsResultSchema, RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { classify, decideGuard, resolveOverride } from "./guard-policy.mjs";
@@ -617,6 +617,28 @@ function auditRecord({ sessionId, context, connection, operation, decision, reas
   };
 }
 
+/** Pick the one workspace a client's `roots/list` answer names. Roots are
+ *  client-asserted, so anything but exactly one absolute file:// root is
+ *  refused: Nexus surfaces the conflict and never guesses (paper §7). */
+export function pickWorkspaceFromRoots(roots) {
+  const dirs = new Set();
+  for (const root of Array.isArray(roots) ? roots : []) {
+    const uri = typeof root?.uri === "string" ? root.uri : "";
+    if (!uri.startsWith("file://")) continue;
+    let dir;
+    try {
+      dir = fileURLToPath(uri);
+    } catch {
+      continue;
+    }
+    if (!path.isAbsolute(dir) || dir.length > 1024) continue;
+    dirs.add(path.resolve(dir));
+  }
+  if (dirs.size === 0) return { ok: false, reason: "The agent reported no workspace folder, so Nexus cannot tell which project this is. Register Nexus in the project with its workspace, then try again." };
+  if (dirs.size > 1) return { ok: false, reason: "The agent reported more than one workspace folder, so Nexus cannot tell which project this is. Open the agent in a single project folder or register Nexus with an explicit workspace." };
+  return { ok: true, workspace: [...dirs][0] };
+}
+
 /** Directly relays upstream tool definitions and calls, rather than reimplementing provider tools. */
 export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
   const server = new Server({ name: "nexus-guard", version: "0.3.0" }, { capabilities: { tools: { listChanged: false } } });
@@ -626,7 +648,12 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
     connectProvider: connectGithubProvider ?? connectGitHub,
     refreshToken,
   };
-  const pinnedWorkspace = path.resolve(workspace);
+  // `workspace: null` defers binding to the client's MCP roots (paper §7/§10):
+  // used only when no explicit workspace was supplied. Once bound it never
+  // changes; a later roots change forces developer confirmation, not a switch.
+  let pinnedWorkspace = workspace == null ? null : path.resolve(workspace);
+  let boundFromRoots = false;
+  let rootsDirty = false;
   // Notion §6: server-held short-lived opaque sessions, re-validated every request.
   const store = sessionStore ?? createSessionStore();
   // Local audit instance id for token-less (stdio compat) calls. Never echoed
@@ -834,8 +861,42 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
     return { tools: contextToolDefinitions() };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
+    rootsDirty = true;
+  });
+
+  async function readRoots(extra) {
+    if (!server.getClientCapabilities()?.roots) return { ok: false, reason: "The agent does not share its workspace folder, so Nexus cannot tell which project this is. Register Nexus in the project with its workspace, then try again." };
+    try {
+      const result = await extra.sendRequest({ method: "roots/list" }, ListRootsResultSchema);
+      return pickWorkspaceFromRoots(result.roots);
+    } catch {
+      return { ok: false, reason: "Nexus could not read the agent's workspace folder. Register Nexus in the project with its workspace, then try again." };
+    }
+  }
+
+  /** Bind (first call) or re-check (after roots/list_changed) the roots-derived workspace. */
+  async function ensureWorkspace(extra) {
+    if (pinnedWorkspace && !boundFromRoots) return { ok: true };
+    if (pinnedWorkspace && !rootsDirty) return { ok: true };
+    const found = await readRoots(extra);
+    if (!found.ok) return { ok: false, reason: found.reason };
+    if (!pinnedWorkspace) {
+      pinnedWorkspace = found.workspace;
+      boundFromRoots = true;
+      return { ok: true };
+    }
+    if (found.workspace !== pinnedWorkspace) {
+      return { ok: false, reason: "The agent's workspace folder changed during this session. Developer confirmation is required before Nexus proceeds; reconnect the agent in the new project." };
+    }
+    rootsDirty = false;
+    return { ok: true };
+  }
+
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args = {} } = request.params;
+    const located = await ensureWorkspace(extra);
+    if (!located.ok) return blocked(located.reason);
     const rawToken = sessionTokenFromArgs(args);
     let validatedToken = null;
     if (rawToken) {
@@ -849,6 +910,9 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
       const ctxForAudit = await readContext(pinnedWorkspace).catch(() => ({ workspace: pinnedWorkspace }));
       await audit({ ...auditRecord({ sessionId: `anon:${instanceId}`, context: ctxForAudit, connection: null, operation: name ?? null, decision: "block", reason: "Missing Nexus session." }), __context: ctxForAudit });
       return decisionResult("block", { reason: "Missing Nexus session. Mint one via POST /session, then retry with session.", operation: name ?? null }, true);
+    }
+    if (boundFromRoots && validatedToken?.workspace && path.resolve(validatedToken.workspace) !== pinnedWorkspace) {
+      return blocked("That Nexus session does not belong to the project this agent is in.");
     }
     const tokenKey = validatedToken?.token ?? null;
     const auditSid = auditSessionId(validatedToken);
