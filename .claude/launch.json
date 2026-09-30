@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 1420
+    },
+    {
+      "name": "website",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "nexus guard website"],
+      "port": 5173
+    },
+    {
+      "name": "mcp-http",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["mcp/nexus-http-server.mjs"],
+      "env": { "NEXUS_HTTP_PORT": "3939" },
+      "port": 3939
+    }
+  ]
+}

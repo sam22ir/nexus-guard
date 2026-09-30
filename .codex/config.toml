@@ -1,0 +1,8 @@
+# Nexus Guard local MCP connection (HTTP-only single transport).
+# Workspace-bound remote: the ?workspace= query pins this repo's project.
+# Where the client supports custom headers, also send:
+#   X-Nexus-Workspace: /home/saadi/Documents/ChatGPT/nexus guard
+[mcp_servers.nexus]
+url = "http://127.0.0.1:3939/mcp?workspace=/home/saadi/Documents/ChatGPT/nexus%20guard"
+startup_timeout_ms = 10000
+tool_timeout_sec = 30

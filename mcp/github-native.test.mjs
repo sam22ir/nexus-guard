@@ -1,0 +1,100 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { makeNexusServer } from "./nexus-server.mjs";
+
+const githubTools = [
+  { name: "get_file_contents", description: "Read a file", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } },
+  { name: "search_repositories", description: "Search repos", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } },
+  { name: "create_issue", description: "Create issue", inputSchema: { type: "object", properties: {} } },
+];
+
+async function fixture(t, connections) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-gh-test-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dir, ".nexus"), { recursive: true });
+  await fs.writeFile(path.join(dir, ".nexus", "project.json"), JSON.stringify({
+    project: "Koupa", project_id: "koupa", environment: "development", connections,
+  }));
+  return dir;
+}
+
+async function session(t, workspace, log = [], audits = []) {
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const server = makeNexusServer({
+    workspace,
+    getToken: async () => "fake-supabase-token",
+    connectProvider: async () => ({ listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ type: "text", text: "{}" }] }), close: async () => {} }),
+    getGithubToken: async (projectId, connectionId) => {
+      log.push({ kind: "credential", projectId, connectionId });
+      return "fake-github-token";
+    },
+    connectGithubProvider: async (connection, token) => {
+      log.push({ kind: "connect", target: connection.target, token });
+      return {
+        listTools: async () => ({ tools: githubTools }),
+        callTool: async ({ name, arguments: args }) => {
+          log.push({ kind: "call", name, args, target: connection.target });
+          return { content: [{ type: "text", text: JSON.stringify({ target: connection.target, args }) }] };
+        },
+        close: async () => {},
+      };
+    },
+    onAudit: (entry) => audits.push(entry),
+  });
+  const client = new Client({ name: "test", version: "1.0.0" }, { capabilities: {} });
+  await server.connect(serverSide);
+  await client.connect(clientSide);
+  t.after(async () => { await client.close(); await server.close(); });
+  return client;
+}
+
+function body(response) { return JSON.parse(response.content[0].text); }
+
+test("GitHub native: no proxy listing (paper) — forwards via nexus.execute with scoped token", async (t) => {
+  const dir = await fixture(t, { github: { target: "saadi/koupa", resource: "saadi/koupa", account: "personal", accountId: "personal-github", connection_id: "koupa-gh", method: "mcp", status: "connected" } });
+  const log = [];
+  const client = await session(t, dir, log);
+  const names = (await client.listTools()).tools.map((tool) => tool.name);
+  assert(names.includes("nexus.execute"));
+  assert(!names.some((n) => n.startsWith("github__")));
+  const ok = await client.callTool({ name: "nexus.execute", arguments: { provider: "github", operation: "get_file_contents", arguments: {} } });
+  assert.equal(body(ok).target, "saadi/koupa");
+  assert(!JSON.stringify(ok).includes("fake-github-token"));
+  assert(log.some((i) => i.kind === "credential" && i.projectId === "koupa" && i.connectionId === "koupa-gh"));
+  // Hidden compat proxy still forwards (hide, don't break routing).
+  const compat = await client.callTool({ name: "github__get_file_contents", arguments: {} });
+  assert.equal(body(compat).target, "saadi/koupa");
+});
+
+test("GitHub native: cross-target and writes block before provider", async (t) => {
+  const dir = await fixture(t, { github: { target: "saadi/koupa", resource: "saadi/koupa", account: "personal-github", connection_id: "koupa-gh", method: "mcp", status: "connected" } });
+  const log = [];
+  const audits = [];
+  const client = await session(t, dir, log, audits);
+  const cross = await client.callTool({ name: "nexus_execute", arguments: { provider: "github", operation: "get_file_contents", arguments: { target: "saadi/other" } } });
+  assert.equal(cross.isError, true);
+  assert.equal(body(cross).decision, "block");
+  const write = await client.callTool({ name: "github__create_issue", arguments: {} });
+  assert.equal(write.isError, true);
+  assert.equal(body(write).decision, "block");
+  assert.equal(log.filter((i) => i.kind === "call").length, 0);
+  assert(audits.some((a) => a.provider === "github"));
+});
+
+test("Curated passthrough: notion execute requires approval without provider contact", async (t) => {
+  const dir = await fixture(t, { notion: { target: "koupa-docs", resource: "koupa-docs", account: "personal", connection_id: "koupa-notion", method: "mcp", status: "connected" } });
+  const log = [];
+  const audits = [];
+  const client = await session(t, dir, log, audits);
+  const res = await client.callTool({ name: "nexus_execute", arguments: { provider: "notion", operation: "search", arguments: {} } });
+  assert.equal(res.isError, true);
+  assert.equal(body(res).decision, "approval_required");
+  assert.equal(log.filter((i) => i.kind === "call").length, 0);
+  assert(audits.some((a) => a.provider === "notion" && a.decision === "approval_required"));
+  assert(!JSON.stringify(res).includes("fake-github-token"));
+});

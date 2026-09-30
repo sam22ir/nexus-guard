@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1a1a1a" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" type="image/png" href="/nexus-symbol.png" />
+    <link rel="apple-touch-icon" href="/nexus-symbol.png" />
+    <meta name="description" content="Nexus Guard is a project-aware service and credential manager for coding agents. Protect your environments from cross-project contamination." />
+    <meta property="og:title" content="Nexus Guard : Project-Aware Access for Coding Agents" />
+    <meta property="og:description" content="Nexus Guard keeps coding agents tied to the workspace they are working on. Context is a security boundary." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/og-card.png" />
+    <meta property="og:site_name" content="Nexus Guard" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Nexus Guard : Keep coding agents in context" />
+    <meta name="twitter:description" content="Project-aware service security for coding agents. Scaffold preview, Supabase-only MVP." />
+    <meta name="twitter:image" content="/og-card.png" />
+    <title>Nexus Guard : Keep coding agents in context</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <h1>Nexus Guard: connect your agents once. Link your services once.</h1>
+      <p>Nexus Guard is a project-aware scaffold for coding-agent service access (Tauri 2, React, Rust). Status: scaffold, not yet MVP. Linux first. Supabase-only MVP (+ GitHub spike, labeled). HTTP-only transport. This page needs JavaScript for the full interactive site; the summary below is the same content agents and search engines get without it.</p>
+      <h2>Canonical chain</h2>
+      <p>Agent → Session → Project → Environment → Service → Account → Resource → Capability → Policy Decision. Supabase + Koupa ≠ Supabase + Nabdh. Supabase + production ≠ Supabase + development.</p>
+      <h2>MVP scope</h2>
+      <p>Local desktop app on Linux; project registry with secret-free .nexus/project.json; one provider (Supabase, + GitHub spike labeled); HTTP-only single transport; isolated concurrent agent sessions; minimal Guard decisions (allow, warn, require approval, block — full engine deferred); secret-free local audit log; agent-facing MCP interface: nexus.context, nexus.request_access, nexus.execute. Not a vault, enterprise-governance platform, filesystem sandbox, or full policy engine in MVP.</p>
+      <h2>Rules</h2>
+      <p>Only the developer can change policy. Missing or conflicting project identity stops the request — Nexus never silently guesses. Secrets stay in OS secure storage. Anything outside Nexus is unmanaged, not protected.</p>
+      <p>Machine-readable brief: <a href="/llms.txt">llms.txt</a>. Code: <a href="https://github.com/saadi/nexus-guard">github.com/saadi/nexus-guard</a>.</p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

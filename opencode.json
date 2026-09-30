@@ -1,0 +1,41 @@
+{
+  "mcp": {
+    "servers": {
+      "notion": {
+        "type": "remote",
+        "url": "https://mcp.notion.com/mcp"
+      },
+      "cloudflare-api": {
+        "type": "remote",
+        "url": "https://mcp.cloudflare.com/mcp"
+      },
+      "github": {
+        "type": "remote",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "oauth": false,
+        "headers": {
+          "Authorization": "Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+        }
+      },
+      "supabase-direct-unmanaged": {
+        "type": "remote",
+        "url": "https://mcp.supabase.com/mcp"
+      },
+      "nexus-http": {
+        "type": "remote",
+        "url": "http://127.0.0.1:3939/mcp?workspace=/home/saadi/Documents/ChatGPT/nexus%20guard",
+        "headers": {
+          "X-Nexus-Workspace": "/home/saadi/Documents/ChatGPT/nexus guard"
+        }
+      },
+      "heroui-react": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@heroui/react-mcp@latest"
+        ]
+      }
+    }
+  }
+}

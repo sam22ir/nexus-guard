@@ -1,0 +1,47 @@
+# Nexus Guard
+
+> Connect your agents once. Link your services once.
+
+Nexus Guard is a project-aware scaffold for coding-agent service access, built with
+Tauri 2, React, TypeScript, and Rust. Status: scaffold, not yet MVP. Linux first.
+MVP scope: Supabase-only (+ GitHub native adapter spike, labeled). Agents reach
+one persistent local Nexus over HTTP-only (`http://localhost:<port>/mcp`).
+
+## Canonical chain
+
+Agent → Session → Project → Environment → Service → Account → Resource → Capability → Policy Decision
+
+- Supabase + Koupa ≠ Supabase + Nabdh
+- Supabase + production ≠ Supabase + development
+
+## MVP scope
+
+- Local desktop app + local runtime (Linux first)
+- Project registry + `.nexus/project.json` (authoritative, secret-free config)
+- One provider: Supabase (+ GitHub spike, labeled)
+- Single HTTP transport only (`http://localhost:<port>/mcp`)
+- Multiple concurrent agent sessions, isolated by project
+- Minimal Guard: allow / warn / require approval / block (full policy engine deferred-paid)
+- Local audit log (secret-free)
+- Agent-facing MCP interface: `nexus.context`, `nexus.request_access`, `nexus.execute`
+
+## What Nexus is not
+
+- Not a generic secrets vault or password manager
+- Not an enterprise governance/compliance platform
+- Not a filesystem sandbox; its boundary is infrastructure access
+- Not a full policy engine in MVP (minimal Guard only)
+- An action outside Nexus is unmanaged, not protected
+
+## Key rules
+
+- Only the developer can change policy; agents cannot grant access or disable Guard.
+- Missing or conflicting project identity stops the request; Nexus never silently guesses.
+- Secrets stay in OS secure storage; repos hold only safe references.
+- Warn ≠ block; approval is explicit.
+
+## Links
+
+- Website: https://nexus-guard.nafaa-store.workers.dev
+- Source of truth: the Notion paper "Nexus — Product & Technical Strategy"
+- Prototype evidence: `cargo test --manifest-path prototype/nexus-check/Cargo.toml`

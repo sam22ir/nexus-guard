@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-guard",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-23",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nexus-waitlist",
+      "database_id": "5ba20f96-4e27-4c00-b230-5c82a3ca0f3a"
+    }
+  ]
+}

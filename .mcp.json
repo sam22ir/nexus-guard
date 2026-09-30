@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nexus": {
+      "type": "http",
+      "url": "http://127.0.0.1:3939/mcp?workspace=/home/saadi/Documents/ChatGPT/nexus%20guard",
+      "headers": {
+        "X-Nexus-Workspace": "/home/saadi/Documents/ChatGPT/nexus guard"
+      }
+    }
+  }
+}

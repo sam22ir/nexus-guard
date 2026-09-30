@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/tauri.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Nexus Guard — per-project approvals for agent tools. Guarded access, never raw secrets." />
+    <meta name="theme-color" content="#1A1A1A" id="meta-theme-color" />
+    <title>Nexus Guard</title>
+    <script>
+      // Early theme init (paper §11): runs before first paint so the canvas
+      // never flashes the wrong theme. Preference order: saved choice
+      // (localStorage "nexus-theme": "dark" | "light" | "system") >
+      // OS prefers-color-scheme > dark default. Mirrors initTheme() in
+      // src/onboarding.tsx — keep the two in sync.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("nexus-theme") || "system";
+          var theme = stored;
+          if (stored === "system" || !stored) {
+            theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          }
+          if (theme !== "light" && theme !== "dark") theme = "dark";
+          document.documentElement.dataset.theme = theme;
+          var meta = document.getElementById("meta-theme-color");
+          if (meta) meta.setAttribute("content", theme === "light" ? "#F6F5F1" : "#1A1A1A");
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

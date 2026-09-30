@@ -1,0 +1,189 @@
+/* Nexus Guard — theme tokens (single source of truth, paper §11).
+   Dark is the default; light overrides under [data-theme="light"].
+   Near-black monochrome (dark) / warm paper (light) per paper §11.
+   No gradients, no neon, no glass, no heavy shadows.
+   System sans + system mono. Status hues keep the same meaning
+   in both themes (green=flowing/ok, blue=info/curated, red=blocked,
+   amber=self-added/review, violet=secondary accent) — only the
+   fills switch between muted-dark and pastel-light. */
+
+:root,
+:root.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* HeroUI bridge */
+  --background: #1a1a1a;
+  --foreground: #f5f5f5;
+  --surface: #242424;
+  --surface-foreground: #f5f5f5;
+  --surface-secondary: #262626;
+  --surface-secondary-foreground: #f5f5f5;
+  --surface-tertiary: #262626;
+  --surface-tertiary-foreground: #f5f5f5;
+  --overlay: #242424;
+  --overlay-foreground: #f5f5f5;
+  --muted: #a3a3a3;
+  --default: #333333;
+  --default-hover: #3d3d3d;
+  --default-foreground: #f5f5f5;
+  --default-soft: #262626;
+  --default-soft-foreground: #a3a3a3;
+  --accent: #f5f5f5;
+  --accent-hover: #d4d4d4;
+  --accent-foreground: #1a1a1a;
+  --accent-soft: #262626;
+  --accent-soft-foreground: #f5f5f5;
+
+  /* Muted dark semantics: dim fills, light text */
+  --success: #6fce97;
+  --success-hover: #85d9a8;
+  --success-foreground: #1a1a1a;
+  --success-soft: #1c2e23;
+  --success-soft-foreground: #6fce97;
+  --warning: #e0a93e;
+  --warning-hover: #e8b95c;
+  --warning-foreground: #1a1a1a;
+  --warning-soft: #332a12;
+  --warning-soft-foreground: #e0a93e;
+  --danger: #f08a80;
+  --danger-hover: #f4a09a;
+  --danger-foreground: #1a1a1a;
+  --danger-soft: #3a1e1c;
+  --danger-soft-foreground: #f08a80;
+  --info: #7fb8e8;
+  --info-hover: #93c4ec;
+  --info-foreground: #1a1a1a;
+  --info-soft: #1b2c42;
+  --info-soft-foreground: #7fb8e8;
+
+  --field-background: #262626;
+  --field-foreground: #f5f5f5;
+  --field-placeholder: #737373;
+  --border: #333333;
+  --separator: #2b2b2b;
+  --focus: #f5f5f5;
+  --link: #f5f5f5;
+
+  /* App-level aliases (used by App.css custom classes) */
+  --bg: #1a1a1a;
+  --bg-warm: #242424;
+  --canvas: #1a1a1a;
+  --sidebar: #242424;
+  --panel: #212121;
+  --panel-raised: #262626;
+  --raised: #262626;
+  --line: #333333;
+  --line-soft: #2b2b2b;
+  --text: #f5f5f5;
+  --muted-2: #737373;
+  --green: #6fce97;
+  --green-bg: #1c2e23;
+  --blue: #7fb8e8;
+  --blue-bg: #1b2c42;
+  --violet: #b9a8e8;
+  --violet-bg: #28233d;
+  --orange: #e0a93e;
+  --orange-bg: #332a12;
+  --red: #f08a80;
+  --red-bg: #3a1e1c;
+
+  /* Type (no Inter / Roboto / Open Sans) */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", sfmono-regular, menlo, consolas, monospace;
+  --font-serif: charter, "Bitstream Charter", "Sitka Text", cambria, georgia, serif;
+
+  --radius-outer: 12px;
+  --radius-inner: 8px;
+  --ease-elastic: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root.light,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* HeroUI bridge — paper §11 light palette */
+  --background: #f6f5f1;
+  --foreground: #1a1a1a;
+  --surface: #ffffff;
+  --surface-foreground: #1a1a1a;
+  --surface-secondary: #efeeea;
+  --surface-secondary-foreground: #1a1a1a;
+  --surface-tertiary: #efeeea;
+  --surface-tertiary-foreground: #1a1a1a;
+  --overlay: #ffffff;
+  --overlay-foreground: #1a1a1a;
+  --muted: #6b6b66;
+  --default: #e6e4de;
+  --default-hover: #d9d7d0;
+  --default-foreground: #1a1a1a;
+  --default-soft: #efeeea;
+  --default-soft-foreground: #6b6b66;
+  --accent: #1a1a1a;
+  --accent-hover: #000000;
+  --accent-foreground: #ffffff;
+  --accent-soft: #efeeea;
+  --accent-soft-foreground: #1a1a1a;
+
+  /* Pastel semantics — same hues/meanings as dark, light fills */
+  --success: #1f6b45;
+  --success-hover: #175734;
+  --success-foreground: #ffffff;
+  --success-soft: #e3efe7;
+  --success-soft-foreground: #1f6b45;
+  --warning: #8a5a00;
+  --warning-hover: #744c00;
+  --warning-foreground: #ffffff;
+  --warning-soft: #f6ebd3;
+  --warning-soft-foreground: #8a5a00;
+  --danger: #b23a2e;
+  --danger-hover: #9a3128;
+  --danger-foreground: #ffffff;
+  --danger-soft: #fbe4e1;
+  --danger-soft-foreground: #b23a2e;
+  --info: #3651a6;
+  --info-hover: #2d4489;
+  --info-foreground: #ffffff;
+  --info-soft: #e5ebfa;
+  --info-soft-foreground: #3651a6;
+
+  --field-background: #ffffff;
+  --field-foreground: #1a1a1a;
+  --field-placeholder: #9a9a94;
+  --border: #e6e4de;
+  --separator: #e6e4de;
+  --focus: #1a1a1a;
+  --link: #1a1a1a;
+
+  /* App-level aliases — paper §11 light palette */
+  --bg: #f6f5f1;
+  --bg-warm: #ffffff;
+  --canvas: #f6f5f1;
+  --sidebar: #ffffff;
+  --panel: #ffffff;
+  --panel-raised: #efeeea;
+  --raised: #efeeea;
+  --line: #e6e4de;
+  --line-soft: #e6e4de;
+  --text: #1a1a1a;
+  --muted-2: #9a9a94;
+  --green: #1f6b45;
+  --green-bg: #e3efe7;
+  --blue: #3651a6;
+  --blue-bg: #e5ebfa;
+  --violet: #5b3fa0;
+  --violet-bg: #ece6f7;
+  --orange: #8a5a00;
+  --orange-bg: #f6ebd3;
+  --red: #b23a2e;
+  --red-bg: #fbe4e1;
+
+  /* Type (no Inter / Roboto / Open Sans) */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", sfmono-regular, menlo, consolas, monospace;
+  --font-serif: charter, "Bitstream Charter", "Sitka Text", cambria, georgia, serif;
+
+  --radius-outer: 12px;
+  --radius-inner: 8px;
+  --ease-elastic: cubic-bezier(0.16, 1, 0.3, 1);
+}
