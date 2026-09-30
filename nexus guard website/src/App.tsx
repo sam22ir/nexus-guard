@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Check,
   Copy,
-  GithubLogo,
   List,
   Moon,
   Sun,
@@ -17,8 +16,6 @@ import "./App.css";
    Source of truth: Notion "Nexus — Product & Technical Strategy".
    Keep this page aligned with the paper. Where they differ, the paper wins.
    -------------------------------------------------------------------------- */
-
-const REPO_URL = "https://github.com/saadi/nexus-guard";
 
 /* ---------- Theme: system by default, manual toggle (paper §11) ---------- */
 type Theme = "light" | "dark";
@@ -235,9 +232,6 @@ function Navbar({
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <a className="icon-btn" href={REPO_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub repository">
-            <GithubLogo size={16} />
-          </a>
           <a href="#waitlist" className="btn btn-primary nav-cta">Get notified</a>
           <button
             type="button"
@@ -1410,7 +1404,6 @@ function Footer({ theme }: { theme: Theme }) {
               <span className="label">Project</span>
               <a href="#roadmap">Roadmap</a>
               <a href="#pricing">Pricing proposal</a>
-              <a href={REPO_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
               <a href="/llms.txt">llms.txt</a>
             </div>
           </div>

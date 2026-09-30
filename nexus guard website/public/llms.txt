@@ -62,4 +62,3 @@ Core routing stays free by design.
 ## Links
 
 - Website: https://nexus-guard.nafaa-store.workers.dev
-- Code: https://github.com/saadi/nexus-guard
