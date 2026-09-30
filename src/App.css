@@ -2,6 +2,7 @@
 @import "tailwindcss/theme.css";
 @import "tailwindcss/utilities.css";
 @import "@heroui/styles";
+@import "./ui/ui.css";
 
 /* Nexus Codex theme. Dark default, light under [data-theme="light"]:
    canvas var(--canvas), sidebar var(--sidebar), cards var(--panel),

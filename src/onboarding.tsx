@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Button } from "@heroui/react";
+import { Icon } from "./ui";
 import type { Account } from "./store";
 import { PROVIDER_CATALOG } from "./store";
 import { desktopAvailable } from "./vault";
@@ -97,6 +99,29 @@ export function ThemeToggle() {
         </button>
       ))}
     </span>
+  );
+}
+
+/** One icon button that cycles System, Light, Dark. Compact stand-in for
+ *  ThemeToggle in the app header; same persistence and OS-follow behavior. */
+export function ThemeButton() {
+  const [choice, setChoice] = useState<NexusThemeChoice>(getThemeChoice);
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    function onChange() {
+      if (getThemeChoice() === "system") applyTheme(resolveTheme("system"));
+    }
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  const order: NexusThemeChoice[] = ["system", "light", "dark"];
+  const next = order[(order.indexOf(choice) + 1) % order.length];
+  const name = (value: NexusThemeChoice) => (value === "system" ? "System" : value === "light" ? "Light" : "Dark");
+  const icon = choice === "system" ? "monitor" : choice === "light" ? "sun" : "moon";
+  return (
+    <Button isIconOnly size="sm" variant="ghost" aria-label={`Theme: ${name(choice)}. Switch to ${name(next)}`} onPress={() => { setTheme(next); setChoice(next); }}>
+      <Icon name={icon} size={17} />
+    </Button>
   );
 }
 

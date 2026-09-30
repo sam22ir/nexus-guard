@@ -1,0 +1,533 @@
+/* Nexus design system — component layer (paper §11).
+   Colors come only from theme.css tokens, so every rule here is correct in
+   dark and light. No hex literals in this file. Flat cards, hairline borders,
+   12–20px radii, sparse semantic color, no glows or gradients. */
+
+:root {
+  --r-card: 16px;
+  --r-inner: 12px;
+  --r-control: 10px;
+  --r-pill: 9999px;
+  --rail-w: 88px;
+  --shadow-card: none;
+  --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.45);
+}
+
+[data-theme="light"],
+:root.light {
+  --shadow-card: 0 1px 2px rgb(26 26 26 / 0.04), 0 4px 14px rgb(26 26 26 / 0.04);
+  --shadow-pop: 0 10px 32px rgb(26 26 26 / 0.14);
+}
+
+/* ---------- Frame ---------- */
+
+.nx-app {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  background: var(--canvas);
+  color: var(--text);
+}
+
+.nx-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.nx-main {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 28px 28px;
+}
+
+.nx-page {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  width: 100%;
+  max-width: 1320px;
+  margin-inline: auto;
+}
+
+/* ---------- Rail ---------- */
+
+.nx-rail {
+  display: flex;
+  width: var(--rail-w);
+  flex: 0 0 var(--rail-w);
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 8px 14px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
+}
+
+.nx-brand {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 14px;
+  border: 0;
+  border-radius: var(--r-inner);
+  background: #1a1a1a;
+  cursor: pointer;
+}
+
+.nx-brand img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  display: block;
+}
+
+.nx-nav {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nx-nav-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 4px 7px;
+  border: 0;
+  border-radius: var(--r-inner);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nx-nav-item:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.nx-nav-item[aria-current="page"] {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.nx-rail-spacer {
+  flex: 1;
+}
+
+.nx-user {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 8px;
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ---------- Header ---------- */
+
+.nx-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line);
+}
+
+.nx-header-titles {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.nx-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nx-crumbs [aria-current="page"] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nx-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.nx-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- Surfaces ---------- */
+
+.nx-card {
+  min-width: 0;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+
+.nx-card-flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.nx-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.nx-eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.nx-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.nx-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-muted {
+  color: var(--muted);
+}
+
+/* ---------- Badges ---------- */
+
+.nx-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.nx-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+}
+
+.nx-badge[data-tone="success"] { background: var(--green-bg); color: var(--green); }
+.nx-badge[data-tone="danger"] { background: var(--red-bg); color: var(--red); }
+.nx-badge[data-tone="warning"] { background: var(--orange-bg); color: var(--orange); }
+.nx-badge[data-tone="info"] { background: var(--blue-bg); color: var(--blue); }
+.nx-badge[data-tone="violet"] { background: var(--violet-bg); color: var(--violet); }
+
+/* ---------- Stat tiles ---------- */
+
+.nx-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 10px;
+}
+
+.nx-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--raised);
+  border-radius: var(--r-inner);
+}
+
+.nx-stat strong {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.nx-stat span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- Step / list rows ---------- */
+
+.nx-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.nx-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.nx-row:first-child {
+  border-top: 0;
+}
+
+button.nx-row {
+  cursor: pointer;
+}
+
+button.nx-row:hover,
+.nx-row[data-active="true"] {
+  background: var(--raised);
+}
+
+.nx-row-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nx-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.nx-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nx-tile {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.nx-tile[data-tone="success"] { background: var(--green-bg); color: var(--green); }
+.nx-tile[data-tone="danger"] { background: var(--red-bg); color: var(--red); }
+.nx-tile[data-tone="warning"] { background: var(--orange-bg); color: var(--orange); }
+.nx-tile[data-tone="info"] { background: var(--blue-bg); color: var(--blue); }
+.nx-tile[data-tone="violet"] { background: var(--violet-bg); color: var(--violet); }
+.nx-tile[data-tone="ink"] { background: var(--text); color: var(--canvas); }
+
+.nx-check {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  border: 1.5px solid var(--line);
+  color: var(--muted);
+}
+
+.nx-check[data-state="done"] { background: var(--green); border-color: var(--green); color: var(--canvas); }
+.nx-check[data-state="failed"] { background: var(--red); border-color: var(--red); color: var(--canvas); }
+.nx-check[data-state="skipped"] { border-style: dashed; }
+
+/* ---------- Segmented control ---------- */
+
+.nx-seg {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 2px;
+  padding: 3px;
+  background: var(--raised);
+  border-radius: var(--r-control);
+}
+
+.nx-seg button {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-seg button[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-card);
+}
+
+[data-theme="dark"] .nx-seg button[aria-selected="true"],
+:root:not([data-theme]) .nx-seg button[aria-selected="true"] {
+  background: var(--line);
+}
+
+/* ---------- Notice + empty ---------- */
+
+.nx-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-inner);
+  box-shadow: var(--shadow-card);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.nx-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.nx-empty strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nx-page[data-fill] {
+  flex: 1 1 0;
+}
+
+.nx-main[data-fill] {
+  padding: 12px 16px 16px;
+}
+
+.nx-page[data-fill] {
+  max-width: none;
+  width: 100%;
+}
+
+/* ---------- Fields ---------- */
+
+.nx-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nx-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.nx-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.nx-input.nx-mono {
+  font-size: 12.5px;
+}
+
+.topo-node {
+  cursor: pointer;
+}
+
+/* The topology is a canvas: no text selection inside it (WebKitGTK needs the
+   prefixed property), except in its search field. */
+.topology-view,
+.topology-view *:not(input):not(textarea) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.topology-view input {
+  -webkit-user-select: text;
+  user-select: text;
+}

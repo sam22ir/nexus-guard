@@ -3,11 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopAvailable, hasPublishableKey, listSupabaseProjects, lockVault, removeMcpTokens, removePublishableKey, saveMcpTokens, savePublishableKey, unlockVault } from "./vault";
 import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, saveAccounts, saveProjects, starterAccounts, starterProjects, tierForProvider, PROVIDER_CATALOG, accountLabelForConnection, type Account, type Connection, type Project } from "./store";
-import { blastRadiusWarningsFor, detectBlastRadius } from "./accounts";
+import { accountGroupKey, blastRadiusWarningsFor, detectBlastRadius } from "./accounts";
 import { CENTRAL_TABLE, VOCAB, resolveOverride } from "./guard";
 import { HomeView } from "./home";
-import { agentDisplayName, projectDisplayName } from "./topology";
-import { OnboardingModal, initTheme, nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "./onboarding";
+import { agentDisplayName, projectDisplayName, type PendingLinkRequest } from "./topology";
+import { OnboardingModal, ThemeButton, initTheme, nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "./onboarding";
+import { Button } from "@heroui/react";
+import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
 import "./App.css";
 
 type View = "home" | "overview" | "projects" | "agents" | "bindings" | "services" | "guard" | "activity" | "settings";
@@ -46,25 +48,6 @@ function badgeStyle(tone: string): { background: string; color: string } {
   return { background: "#262626", color: "#A3A3A3" };
 }
 
-function BrandMark({ size = 30 }: { size?: number }) {
-  return (
-    <span
-      className="flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-[#333333] bg-[#212121]"
-      style={{ width: size, height: size }}
-      aria-hidden="true"
-    >
-      <img
-        src="/nexus-symbol.png"
-        onError={(e) => { const img = e.currentTarget; if (!img.src.endsWith("nexus-symbol-dark.png")) img.src = "/nexus-symbol-dark.png"; }}
-        alt=""
-        width={size - 6}
-        height={size - 6}
-        style={{ width: size - 6, height: size - 6, objectFit: "contain", display: "block" }}
-      />
-    </span>
-  );
-}
-
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
     grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -91,20 +74,13 @@ function StatusDot({ tone = "green" }: { tone?: string }) {
   return <span aria-hidden="true" style={{ display: "inline-block", width: 7, height: 7, borderRadius: 9999, background: color, flexShrink: 0 }} />;
 }
 
-function RailButton({ label, icon, active, onClick }: { label: string; icon: string; active?: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} aria-current={active ? "page" : undefined} className={`rail-icon-btn ${active ? "is-active" : ""}`} title={label}>
-      <Icon name={icon} />
-      <span className="rail-tooltip">{label}</span>
-    </button>
-  );
-}
-
 function App() {
   const [view, setView] = useState<View>("home");
   const [projects, setProjects] = useState<Project[]>(loadProjects);
   const [accounts, setAccounts] = useState<Account[]>(loadAccounts);
   const [selectedProject, setSelectedProject] = useState(() => window.localStorage.getItem("nexus-guard.selected-project") ?? "koupa");
+  const [linkDraft, setLinkDraft] = useState<{ projectId: string; provider: string; accountId?: string } | null>(null);
+  const [linkPrefill, setLinkPrefill] = useState<{ provider: string; accountId?: string } | null>(null);
   const [modal, setModal] = useState<"project" | "connection" | "key" | "edit-project" | "edit-connection" | "agent" | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return !window.localStorage.getItem("nexus-guard.onboarded"); } catch { return false; }
@@ -717,118 +693,157 @@ function App() {
   const currentLabel = viewLabels[view] ?? view;
   const scopedView = view === "overview" || view === "bindings" || view === "activity";
 
-  return (
-    <div className="flex h-screen w-full overflow-hidden bg-[#1A1A1A] text-[#F5F5F5]" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Geist Sans', 'Helvetica Neue', sans-serif" }}>
-      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-[6px] focus:bg-[#F5F5F5] focus:px-3 focus:py-2 focus:text-[13px] focus:text-[#1A1A1A]">
-        Skip to content
-      </a>
-      <aside className="nexus-rail" aria-label="Primary">
-        <button type="button" onClick={() => setView("home")} className="rail-brand" aria-label="Nexus Guard home">
-          <BrandMark size={34} />
-          <span className="rail-brand-mark">N</span>
+  // Connections whose account is also bound to another project (paper §6):
+  // marked on the canvas and named in the link/unlink confirm steps.
+  const sharedConnectionIds = useMemo(() => {
+    const shared = new Set(detectBlastRadius(projects, accounts).map((entry) => entry.accountKey));
+    const ids = new Set<string>();
+    for (const item of projects) {
+      for (const connection of item.connections ?? []) {
+        const key = accountGroupKey(connection.provider, connection);
+        if (key && shared.has(key)) ids.add(connection.id);
+      }
+    }
+    return ids;
+  }, [projects, accounts]);
+
+  /** Drag-to-link: the canvas only asks. Open the same binding picker the
+   *  Bindings tab uses, prefilled from the drag; nothing saves until confirmed. */
+  function requestLink(request: PendingLinkRequest) {
+    const nodes = [request.from, request.to];
+    const projectNode = nodes.find((node) => node.kind === "project");
+    const serviceNode = nodes.find((node) => node.kind === "service");
+    if (!projectNode || !serviceNode) {
+      setNotice(nodes.some((node) => node.kind === "agent")
+        ? "Agents connect from the Agents tab, and the project they work in is resolved automatically. Drag a service onto a project to link it."
+        : "Drag a service onto a project to link it.");
+      return;
+    }
+    const source = projects.flatMap((item) => (item.connections ?? []).map((connection) => ({ owner: item, connection }))).find(({ connection }) => connection.id === serviceNode.id);
+    if (!source) return;
+    if (source.owner.id === projectNode.id) {
+      setNotice(`${source.connection.provider} is already bound to ${source.owner.name}.`);
+      return;
+    }
+    setSelectedProject(projectNode.id);
+    setLinkDraft({ projectId: projectNode.id, provider: source.connection.provider, accountId: source.connection.accountId });
+  }
+
+  /** Confirmed from the in-canvas card: the only place a drop saves. */
+  function confirmLink(input: { provider: string; target: string; accountId?: string }) {
+    if (!linkDraft) return;
+    addConnection({ provider: input.provider, target: input.target, detail: "Resource", tone: "blue", method: "manual", authState: "not_connected", accountId: input.accountId });
+    setLinkDraft(null);
+  }
+
+  function unlinkFromCanvas(projectId: string, connectionId: string) {
+    const owner = projects.find((item) => item.id === projectId);
+    const connection = owner?.connections.find((item) => item.id === connectionId);
+    if (owner && connection) void removeConnection(connection, owner, true);
+  }
+
+  const navItems: NavItem<View>[] = [
+    { id: "home", label: "Home", icon: "home" },
+    { id: "projects", label: "Projects", icon: "folder" },
+    { id: "overview", label: "Overview", icon: "grid" },
+    { id: "bindings", label: "Bindings", icon: "link" },
+    { id: "activity", label: "Activity", icon: "activity" },
+    { id: "services", label: "Services", icon: "services" },
+    { id: "agents", label: "Agents", icon: "agents" },
+    ...(GUARD_VISIBLE ? [{ id: "guard" as const, label: "Guard", icon: "shield" as const }] : []),
+  ];
+
+  const railFooter = (
+    <>
+      <div className="relative w-full">
+        <button type="button" aria-expanded={vaultMenuOpen} onClick={() => setVaultMenuOpen((open) => !open)} className="nx-nav-item" title={vaultUnlocked ? "Vault unlocked" : "Vault locked"}>
+          <NxIcon name={vaultUnlocked ? "unlock" : "lock"} size={20} />
+          {vaultUnlocked ? "Unlocked" : "Locked"}
         </button>
-        <nav className="rail-nav" aria-label="Workspace navigation">
-          <RailButton label="Home" icon="home" active={view === "home"} onClick={() => setView("home")} />
-          <RailButton label="Projects" icon="folder" active={view === "projects"} onClick={() => setView("projects")} />
-          <RailButton label="Overview" icon="grid" active={view === "overview"} onClick={() => setView("overview")} />
-          <RailButton label="Bindings" icon="link" active={view === "bindings"} onClick={() => setView("bindings")} />
-          <RailButton label="Activity" icon="activity" active={view === "activity"} onClick={() => setView("activity")} />
-          <RailButton label="Services" icon="services" active={view === "services"} onClick={() => setView("services")} />
-          <RailButton label="Agents" icon="nodes" active={view === "agents"} onClick={() => setView("agents")} />
-          {GUARD_VISIBLE && <RailButton label="Guard rules" icon="shield" active={view === "guard"} onClick={() => setView("guard")} />}
-        </nav>
-        <div className="rail-spacer" />
-        <div className="relative rail-vault-wrap">
-          <button type="button" aria-expanded={vaultMenuOpen} onClick={() => setVaultMenuOpen((open) => !open)} className="rail-icon-btn" title={vaultUnlocked ? "Vault unlocked" : "Vault locked"}>
-            <StatusDot tone={vaultUnlocked ? "green" : "orange"} />
-            <span className="rail-tooltip">{vaultUnlocked ? "Vault unlocked" : "Vault locked"}</span>
-          </button>
-          {vaultMenuOpen && (
-            <div className="rail-popover" role="status">
-              <strong>{vaultUnlocked ? "Desktop vault unlocked" : "Desktop vault locked"}</strong>
-              <span>{connectedApprovals} approval{connectedApprovals === 1 ? "" : "s"} saved · OS keychain holds the secrets</span>
-              <span>{desktopAvailable() ? "MCP approvals save without unlocking. Typed keys unlock inline." : "Open the desktop app to manage the vault."}</span>
-              <div className="mt-2 flex gap-2">
-                <button type="button" onClick={() => { setVaultMenuOpen(false); setView("settings"); }} className={smallBtn}>Open settings</button>
-                {vaultUnlocked && <button type="button" onClick={() => { setVaultMenuOpen(false); void lockVault().then(() => setVaultUnlocked(false)).catch(() => undefined); }} className={smallBtn}>Lock now</button>}
-              </div>
+        {vaultMenuOpen && (
+          <div className="nx-notice absolute bottom-2 left-full z-40 ml-3 w-[280px] flex-col !items-stretch gap-1" style={{ boxShadow: "var(--shadow-pop)" }} role="status">
+            <strong>{vaultUnlocked ? "Desktop vault unlocked" : "Desktop vault locked"}</strong>
+            <span className="nx-muted">{connectedApprovals} approval{connectedApprovals === 1 ? "" : "s"} saved · OS keychain holds the secrets</span>
+            <span className="nx-muted">{desktopAvailable() ? "MCP approvals save without unlocking. Typed keys unlock inline." : "Open the desktop app to manage the vault."}</span>
+            <div className="mt-2 flex gap-2">
+              <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); setView("settings"); }}>Open settings</Button>
+              {vaultUnlocked && <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); void lockVault().then(() => setVaultUnlocked(false)).catch(() => undefined); }}>Lock now</Button>}
             </div>
-          )}
-        </div>
-        <RailButton label="Settings" icon="settings" active={view === "settings"} onClick={() => setView("settings")} />
-        <span className="rail-user" title={osUser}>{osUser.slice(0, 1).toUpperCase()}</span>
-      </aside>
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-[#333333] bg-[#1A1A1A] px-6 pt-5">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-[12px] text-[#A3A3A3]">
-          <span>Home</span>
-          <span aria-hidden="true" className="text-[#555555]">/</span>
-          <span aria-current="page" className="font-medium text-[#F5F5F5]">{currentLabel}</span>
-          {scopedView && (
-            <>
-              <span aria-hidden="true" className="text-[#555555]">/</span>
-              <span className="tabular-nums">{project.name} · {project.environment}</span>
-            </>
-          )}
-        </nav>
-        {!desktopAvailable() && (
-          <p className="mt-3 flex items-center gap-2 rounded-[8px] border border-[#333333] bg-[#212121] px-3 py-2.5 text-[12px] text-[#A3A3A3]" role="note">
-            <StatusDot tone="orange" />
-            Browser preview shows saved project details only. Connecting services, vault, audit logs, and agent detection need the desktop app.
-          </p>
-        )}
-      </div>
-
-      <main id="main" className="app-main mx-auto flex min-h-0 w-full max-w-[1440px] flex-1 flex-col overflow-y-auto overflow-x-hidden px-8 py-6">
-        {notice && (
-          <div className="mb-5 flex items-start gap-2 rounded-[8px] border border-[#333333] bg-[#212121] px-3 py-2.5 text-[12px] leading-[1.6] text-[#F5F5F5] shadow-[0_2px_8px_rgba(0,0,0,0.45)]" role="status">
-            <span className="mt-1"><StatusDot tone={notice.includes("connected") ? "green" : "orange"} /></span>
-            <span className="min-w-0 flex-1">{notice}</span>
-            <button type="button" aria-label="Dismiss" onClick={() => setNotice("")} className="rounded-[4px] px-1.5 text-[14px] leading-none text-[#A3A3A3] hover:text-[#F5F5F5] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F5F5]">×</button>
           </div>
         )}
-        {view === "home" && <HomeView projects={projects} accounts={accounts} onView={setView} onSelectProject={selectProject} onOpenOnboarding={() => setOnboardingOpen(true)} />}
-        {view === "overview" && <Overview project={project} projects={projects} accounts={accounts} onView={setView} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />}
-        {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
-        {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
-        {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onRemove={(connection) => void removeConnection(connection)} onEdit={(connection) => openEditConnection(project.id, connection)} onOpenServices={() => setView("services")} />}
-        {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} />}
-        {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
-        {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
-        {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
-          if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log return to starter examples. Vault approvals in the OS keychain are untouched.")) return;
-          try {
-            window.localStorage.removeItem("nexus-guard.projects");
-            window.localStorage.removeItem("nexus-guard.accounts");
-            window.localStorage.removeItem("nexus-guard.errors");
-            window.localStorage.removeItem("nexus-guard.selected-project");
-          } catch { /* ignore */ }
-          setProjects(starterProjects);
-          setAccounts(starterAccounts);
-          setSelectedProject(starterProjects[0].id);
-          setErrorLog([]);
-          setView("overview");
-          setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per connection if needed.");
-        }} />}
-      </main>
-
-      <footer className="shrink-0 border-t border-[#333333] bg-[#212121]">
-        <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-2 px-8 py-3 text-[12px] text-[#737373]">
-          <span>Nexus Guard · local approvals, guarded tools for agents.</span>
-          <span className="tabular-nums">{projects.length} project{projects.length === 1 ? "" : "s"} · {connectedApprovals} connected approval{connectedApprovals === 1 ? "" : "s"}</span>
-        </div>
-      </footer>
       </div>
+      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
+        <NxIcon name="settings" size={20} />
+        Settings
+      </button>
+      <span className="nx-user" title={osUser}>{osUser.slice(0, 1).toUpperCase()}</span>
+    </>
+  );
+
+  return (
+    <>
+      <AppShell
+        nav={navItems}
+        active={view}
+        onNavigate={setView}
+        railFooter={railFooter}
+        crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
+        title={currentLabel}
+        fill={view === "home"}
+        actions={
+          <>
+            <ThemeButton />
+            {view === "home" && (
+              <>
+                <Button variant="ghost" size="sm" onPress={() => setOnboardingOpen(true)}>Finish setup</Button>
+                <Button size="sm" onPress={() => setView("agents")}><NxIcon name="plus" size={15} />Connect agent</Button>
+              </>
+            )}
+          </>
+        }
+        status={scopedView ? <Badge tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "success"} dot>{project.environment}</Badge> : undefined}
+        banner={
+          <>
+            {!desktopAvailable() && (
+              <Notice tone="warning">Browser preview shows saved project details only. Connecting services, vault, activity logs, and agent detection need the desktop app.</Notice>
+            )}
+            {notice && <Notice tone={notice.includes("connected") ? "success" : "warning"} onDismiss={() => setNotice("")}>{notice}</Notice>}
+          </>
+        }
+      >
+              {view === "home" && <HomeView projects={projects} accounts={accounts} sharedConnectionIds={sharedConnectionIds} linkDraft={linkDraft} onConfirmLink={confirmLink} onCancelLink={() => setLinkDraft(null)} onContinueInPicker={() => { if (linkDraft) { setLinkPrefill({ provider: linkDraft.provider, accountId: linkDraft.accountId }); setLinkDraft(null); setModal("connection"); } }} onView={setView} onSelectProject={selectProject} onRequestLink={requestLink} onUnlink={unlinkFromCanvas} />}
+      {view === "overview" && <Overview project={project} projects={projects} accounts={accounts} onView={setView} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />}
+      {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
+      {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
+      {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onRemove={(connection) => void removeConnection(connection)} onEdit={(connection) => openEditConnection(project.id, connection)} onOpenServices={() => setView("services")} />}
+      {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} />}
+      {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
+      {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
+      {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
+        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log return to starter examples. Vault approvals in the OS keychain are untouched.")) return;
+        try {
+          window.localStorage.removeItem("nexus-guard.projects");
+          window.localStorage.removeItem("nexus-guard.accounts");
+          window.localStorage.removeItem("nexus-guard.errors");
+          window.localStorage.removeItem("nexus-guard.selected-project");
+        } catch { /* ignore */ }
+        setProjects(starterProjects);
+        setAccounts(starterAccounts);
+        setSelectedProject(starterProjects[0].id);
+        setErrorLog([]);
+        setView("overview");
+        setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per connection if needed.");
+      }} />}
+      </AppShell>
 
       {onboardingOpen && <OnboardingModal onClose={dismissOnboarding} onSave={finishOnboarding} onAddAccount={addAccount} accounts={accounts} existingNames={projects.map((item) => item.name)} onWatchPulse={() => { dismissOnboarding(); setView("home"); }} />}
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "edit-connection" && editingConnection && <EditConnectionModal connection={editingConnection.connection} accounts={accounts} onClose={() => setModal(null)} onOpenServices={() => { setModal(null); setView("services"); }} onSave={(patch) => updateConnection(editingConnection.projectId, editingConnection.connection.id, patch)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal projectId={project.id} projectName={project.name} accounts={accounts} onClose={() => setModal(null)} onOpenServices={() => { setModal(null); setView("services"); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} accounts={accounts} onClose={() => { setModal(null); setLinkPrefill(null); }} onOpenServices={() => { setModal(null); setLinkPrefill(null); setView("services"); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
-    </div>
+    </>
   );
 }
 
@@ -2233,7 +2248,7 @@ function GuardView({ projects, onSetOverride }: { projects: Project[]; onSetOver
       <Card className="flex min-h-[220px] shrink-0 flex-col overflow-hidden">
         <CardHeading
           eyebrow="Recent enforcement"
-          title={!desktop ? "Open the desktop app to read local audit logs" : !loaded ? "Loading" : recentBlocks.length === 0 ? "No blocks recorded" : `${recentBlocks.length} recent block${recentBlocks.length === 1 ? "" : "s"}`}
+          title={!desktop ? "Open the desktop app to read the local activity log" : !loaded ? "Loading" : recentBlocks.length === 0 ? "No blocks recorded" : `${recentBlocks.length} recent block${recentBlocks.length === 1 ? "" : "s"}`}
         />
         {recentBlocks.length > 0 && (
           <div className="flex max-h-[220px] flex-col gap-2 overflow-y-auto">{recentBlocks.map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} />)}</div>
@@ -2273,7 +2288,7 @@ function ActivityView({ projects, errorLog, onClearErrors, onRetryError }: { pro
       )}
       <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
       <Card className="flex min-h-0 flex-[1.4] flex-col overflow-hidden lg:h-full">
-        <CardHeading eyebrow="Audit log" title={!desktop ? "Desktop only" : !loaded ? "Loading" : recent.length === 0 ? "No recorded activity" : `${recent.length} recent decision${recent.length === 1 ? "" : "s"}`} />
+        <CardHeading eyebrow="Activity log" title={!desktop ? "Desktop only" : !loaded ? "Loading" : recent.length === 0 ? "No recorded activity" : `${recent.length} recent decision${recent.length === 1 ? "" : "s"}`} />
         {!loaded && desktop ? (
           <ul className="flex flex-col gap-2" aria-label="Loading activity">
             {[0, 1, 2, 3].map((i) => <li key={i} className="h-[52px] animate-pulse rounded-[8px] bg-[#262626]" />)}
@@ -2286,7 +2301,7 @@ function ActivityView({ projects, errorLog, onClearErrors, onRetryError }: { pro
               {query ? "No decisions match that filter." : "No activity recorded."}
             </p>
             <p className="mx-auto mt-2 max-w-[440px] text-[13px] leading-[1.6] text-[#A3A3A3]">
-              {!desktop ? "Open the desktop app to read local audit logs. Nexus does not track commands run outside the app." : query ? `No decisions match “${filter.trim()}”. Clear the filter to see everything.` : "No agent has used Nexus yet. Nexus does not track commands run outside the app."}
+              {!desktop ? "Open the desktop app to read the local activity log. Nexus does not track commands run outside the app." : query ? `No decisions match “${filter.trim()}”. Clear the filter to see everything.` : "No agent has used Nexus yet. Nexus does not track commands run outside the app."}
             </p>
           </div>
         )}
@@ -2726,8 +2741,8 @@ function EditConnectionModal({ connection, accounts, onClose, onSave, onOpenServ
   );
 }
 
-function AddConnectionModal({ projectId, projectName, accounts, onClose, onSave, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp, onOpenServices }: { projectId: string; projectName: string; accounts: Account[]; onClose: () => void; onSave: (input: { provider: string; target: string; detail: string; tone: Connection["tone"]; method: Connection["method"]; authState: Connection["authState"]; projectRef?: string; url?: string; accountId?: string }) => void; onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: { ref: string; name: string; region?: string | null }[]; listError?: string }>; onConfirmMcp: (projectId: string, connectionId: string, choice: { ref: string; name: string; region?: string | null }) => void; onCancelMcp: (projectId: string, connectionId: string) => void; onAbortMcp: () => void; onOpenServices?: () => void }) {
-  const [provider, setProvider] = useState("Supabase");
+function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, accounts, onClose, onSave, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp, onOpenServices }: { projectId: string; initialProvider?: string; initialAccountId?: string; projectName: string; accounts: Account[]; onClose: () => void; onSave: (input: { provider: string; target: string; detail: string; tone: Connection["tone"]; method: Connection["method"]; authState: Connection["authState"]; projectRef?: string; url?: string; accountId?: string }) => void; onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: { ref: string; name: string; region?: string | null }[]; listError?: string }>; onConfirmMcp: (projectId: string, connectionId: string, choice: { ref: string; name: string; region?: string | null }) => void; onCancelMcp: (projectId: string, connectionId: string) => void; onAbortMcp: () => void; onOpenServices?: () => void }) {
+  const [provider, setProvider] = useState(initialProvider ?? "Supabase");
   const [method, setMethod] = useState<"choose" | "manual" | "mcp">("choose");
   const [target, setTarget] = useState("");
   const [projectRef, setProjectRef] = useState("");
@@ -2753,7 +2768,7 @@ function AddConnectionModal({ projectId, projectName, accounts, onClose, onSave,
     if (authInFlight.current) abortRef.current();
   }, []);
   const matchingAccounts = accounts.filter((a) => a.provider.toLowerCase() === provider.toLowerCase());
-  const [accountId, setAccountId] = useState(() => matchingAccounts[0]?.id ?? "");
+  const [accountId, setAccountId] = useState(() => (initialAccountId && matchingAccounts.some((a) => a.id === initialAccountId) ? initialAccountId : matchingAccounts[0]?.id ?? ""));
   // Re-sync when the registry changes under an open modal: a selected id
   // that no longer exists falls back instead of submitting a stale id. A
   // blank (unlinked) choice is always kept as-is.

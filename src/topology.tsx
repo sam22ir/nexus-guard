@@ -34,8 +34,11 @@
 // that, every call would log a fresh random session and per-agent grouping
 // would be meaningless.
 
-import { useMemo, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
-import { accountLabelForConnection, tierForProvider, type Account, type Connection, type Project } from "./store";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { PROVIDER_CATALOG, accountLabelForConnection, tierForProvider, type Account, type Connection, type Project } from "./store";
+import { Button } from "@heroui/react";
+import { Icon, type IconName } from "./ui";
+import { useCanvasCamera } from "./useCanvasCamera";
 
 export type TopologySession = {
   session: string;
@@ -90,7 +93,7 @@ export const EDGE_STROKE: Record<EdgeState, string> = {
   flowing: "var(--green)",
   warned: "var(--orange)",
   blocked: "var(--red)",
-  idle: "var(--line)",
+  idle: "var(--muted-2)",
 };
 
 const EDGE_LABEL: Record<EdgeState, string> = {
@@ -175,29 +178,39 @@ export function serviceEdgeState(project: Project, connection: Connection, entri
   return "flowing";
 }
 
-/** Tier badge colors — same mapping ServicesView uses (native green,
- *  curated blue, self-added amber). Badges may carry status; node cards
- *  themselves stay neutral. */
-function tierBadge(tier: string): { background: string; color: string } {
-  if (tier === "native") return { background: "var(--green-bg)", color: "var(--green)" };
-  if (tier === "curated") return { background: "var(--blue-bg)", color: "var(--blue)" };
-  return { background: "var(--orange-bg)", color: "var(--orange)" };
+/** Category drives the tinted icon square (paper §11): never status colors. */
+function categoryTile(provider: string): { icon: IconName; tone: "info" | "violet" | "neutral" } {
+  const tags = PROVIDER_CATALOG.find((entry) => entry.provider.toLowerCase() === provider.toLowerCase())?.tags ?? [];
+  const has = (...names: string[]) => tags.some((tag) => names.includes(tag));
+  if (has("Database", "Storage", "Vectors")) return { icon: "database", tone: "info" };
+  if (has("Auth", "Identity", "AI")) return { icon: "key", tone: "violet" };
+  if (has("Source control", "CI")) return { icon: "branch", tone: "neutral" };
+  if (has("Payments")) return { icon: "shield", tone: "neutral" };
+  return { icon: "services", tone: "neutral" };
 }
+
 
 // Deterministic auto-layout: three fixed columns, one slot per row.
 // Column heights re-center as counts change; no manual positions stored.
-const NODE_W = 210;
+const NODE_W = 240;
 const AGENT_H = 108;
 const PROJECT_H = 112;
 const SERVICE_H = 120;
-const COL_X = [18, 242, 466] as const;
-const CANVAS_W = 694;
+const COL_X = [18, 314, 610] as const;
+const CANVAS_W = 868;
+const ZOOM_MIN = 0.35;
+const READABLE_MIN = 0.6;
+const ZOOM_MAX = 2.2;
 const ROW_SLOT = 150;
 const TOP_PAD = 16;
 const MAX_AGENTS = 8;
 const MAX_SERVICES = 12;
 
-type PlacedEdge = { id: string; d: string; x2: number; y2: number; state: EdgeState };
+type PlacedEdge = { id: string; d: string; x2: number; y2: number; mx: number; my: number; state: EdgeState; label: string };
+
+function project_label(project: Project): string {
+  return project.name;
+}
 
 function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   const midX = (x1 + x2) / 2;
@@ -209,7 +222,7 @@ function envMatches(value: string | undefined | null, env: TopologyEnv): boolean
   return (value ?? "").toLowerCase() === env;
 }
 
-export function TopologyGraph({ projects, sessions, entries, accounts, environment = "all", selectedNode = null, onSelectNode, warningsByProject, detailsSlot, onRequestLink }: {
+export function TopologyGraph({ projects, sessions, entries, accounts, environment = "all", selectedNode = null, onSelectNode, warningsByProject, detailsSlot, onRequestLink, selectedEdge = null, onSelectEdge, sharedConnectionIds, insetTop = 0, insetRight = 0 }: {
   projects: Project[];
   sessions: TopologySession[];
   entries: TopologyEntry[];
@@ -229,6 +242,15 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
   /** Drag-to-link callback. The canvas never writes — the parent confirms
    *  through the existing connection forms. */
   onRequestLink?: (request: PendingLinkRequest) => void;
+  /** Connection id of the selected link line; selecting one only opens the
+   *  parent's confirm step — the canvas never removes anything itself. */
+  selectedEdge?: string | null;
+  onSelectEdge?: (connectionId: string | null) => void;
+  /** Connections whose account is also bound to another project (paper §6). */
+  sharedConnectionIds?: Set<string>;
+  /** Space covered by floating UI, so "fit" centers in the visible area. */
+  insetTop?: number;
+  insetRight?: number;
 }) {
   const [dragSource, setDragSource] = useState<Exclude<TopologySelection, null> | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -364,6 +386,72 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
     setDropTarget(null);
   }
 
+  // --- Camera: zoom/pan over the fixed-column layout (see useCanvasCamera). ---
+  const camera = useCanvasCamera({
+    contentW: CANVAS_W,
+    contentH: canvasH,
+    insetTop,
+    insetRight,
+    minZoom: ZOOM_MIN,
+    maxZoom: ZOOM_MAX,
+    readableMin: READABLE_MIN,
+    onEmptyClick: () => { onSelectNode?.(null); onSelectEdge?.(null); },
+  });
+  const { cam, vp, viewportRef, flyTo } = camera;
+  const [query, setQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // --- Navigation: fly-to, neighborhood focus, search, minimap. ---
+  type NodeRect = { x: number; y: number; w: number; h: number; label: string; kind: "agent" | "project" | "service"; id: string };
+  const rects: NodeRect[] = [
+    ...agents.map((agent, i) => ({ ...agentPos[i], w: NODE_W, h: AGENT_H, label: agentDisplayName(agent.agent), kind: "agent" as const, id: agent.session })),
+    ...visibleProjects.map((project, i) => ({ ...projectPos[i], w: NODE_W, h: PROJECT_H, label: project.name, kind: "project" as const, id: project.id })),
+    ...services.map(({ connection }, i) => ({ ...servicePos[i], w: NODE_W, h: SERVICE_H, label: `${connection.provider} ${connection.resource ?? connection.target}`, kind: "service" as const, id: connection.id })),
+  ];
+
+  function flyToNode(sel: Exclude<TopologySelection, null>) {
+    const owner = ownerProjectId(sel);
+    const group = owner ? rects.filter((rect) => ownerProjectId({ kind: rect.kind, id: rect.id } as Exclude<TopologySelection, null>) === owner) : rects.filter((rect) => rect.kind === sel.kind && rect.id === sel.id);
+    if (group.length === 0) return;
+    const x1 = Math.min(...group.map((rect) => rect.x));
+    const y1 = Math.min(...group.map((rect) => rect.y));
+    const x2 = Math.max(...group.map((rect) => rect.x + rect.w));
+    const y2 = Math.max(...group.map((rect) => rect.y + rect.h));
+    flyTo({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
+  }
+
+  // Selecting a project (canvas or panel) moves the camera to its neighborhood.
+  const lastFlown = useRef<string | null>(null);
+  useEffect(() => {
+    const key = selectedNode?.kind === "project" ? selectedNode.id : null;
+    if (key && key !== lastFlown.current) flyToNode(selectedNode as Exclude<TopologySelection, null>);
+    lastFlown.current = key;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNode?.kind, selectedNode?.id]);
+
+  const matches = query.trim()
+    ? rects.filter((rect) => rect.label.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6)
+    : [];
+
+  function jumpTo(rect: NodeRect) {
+    const sel = { kind: rect.kind, id: rect.id } as Exclude<TopologySelection, null>;
+    onSelectNode?.(sel);
+    if (rect.kind !== "project") flyTo(rect, 1.2);
+    setQuery("");
+    searchRef.current?.blur();
+  }
+
+  const MM_W = 176;
+  const MM_H = 112;
+  const mmScale = Math.min((MM_W - 12) / CANVAS_W, (MM_H - 12) / canvasH);
+  function minimapMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const box = event.currentTarget.getBoundingClientRect();
+    const cx = (event.clientX - box.left - 6) / mmScale;
+    const cy = (event.clientY - box.top - 6) / mmScale;
+    camera.centerOn(cx, cy);
+  }
+
   const edges = useMemo<PlacedEdge[]>(() => {
     const list: PlacedEdge[] = [];
     agents.forEach((agent, i) => {
@@ -374,7 +462,7 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
       const y1 = agentPos[i].y + AGENT_H / 2;
       const x2 = projectPos[target].x;
       const y2 = projectPos[target].y + PROJECT_H / 2;
-      list.push({ id: `agent-${agent.session}`, d: edgePath(x1, y1, x2, y2), x2, y2, state });
+      list.push({ id: `agent-${agent.session}`, d: edgePath(x1, y1, x2, y2), x2, y2, mx: (x1 + x2) / 2, my: (y1 + y2) / 2, state, label: `${agentDisplayName(agent.agent)} → ${project_label(visibleProjects[target])}` });
     });
     services.forEach(({ project, connection }, i) => {
       const source = projectIndex.get(project.id);
@@ -384,7 +472,7 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
       const y1 = projectPos[source].y + PROJECT_H / 2;
       const x2 = servicePos[i].x;
       const y2 = servicePos[i].y + SERVICE_H / 2;
-      list.push({ id: `svc-${connection.id}`, d: edgePath(x1, y1, x2, y2), x2, y2, state });
+      list.push({ id: `svc-${connection.id}`, d: edgePath(x1, y1, x2, y2), x2, y2, mx: (x1 + x2) / 2, my: (y1 + y2) / 2, state, label: `${project.name} → ${connection.provider} ${connection.resource ?? connection.target}` });
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -394,45 +482,210 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
   const summary = `${agents.length} live session${agents.length === 1 ? "" : "s"}, ${visibleProjects.length} project${visibleProjects.length === 1 ? "" : "s"}, ${serviceBindings.length} service binding${serviceBindings.length === 1 ? "" : "s"}${envSuffix}`;
 
   return (
-    <div className="topology-view flex min-h-0 flex-1 flex-col overflow-visible">
-      <div className="mb-3 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5" aria-label="Edge legend">
-        {(Object.keys(EDGE_STROKE) as EdgeState[]).map((state) => (
-          <span key={state} className="flex items-center gap-1.5 text-[12px] text-(--muted)">
-            <span aria-hidden="true" style={{ display: "inline-block", width: 16, height: 2, borderRadius: 2, background: EDGE_STROKE[state] }} />
-            {EDGE_LABEL[state]}
-          </span>
-        ))}
-        <span className="ml-auto text-[12px] tabular-nums text-(--muted-2)">{summary}</span>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto rounded-[10px] border border-(--line) bg-(--canvas)">
-        <div className="relative mx-auto" style={{ width: CANVAS_W, height: canvasH, backgroundImage: "radial-gradient(var(--line-soft) 1px, transparent 1px)", backgroundSize: "22px 22px" }}>
+    <div
+      ref={viewportRef}
+      className="topology-view relative h-full w-full overflow-hidden bg-(--canvas) outline-none"
+      tabIndex={0}
+      aria-label="Topology canvas. Scroll or pinch to zoom, drag to pan, plus and minus to zoom, zero to reset."
+      {...camera.bind}
+      style={{
+        ...camera.bind.style,
+        backgroundImage: "radial-gradient(var(--line-soft) 1px, transparent 1px)",
+        backgroundSize: `${22 * cam.z}px ${22 * cam.z}px`,
+        backgroundPosition: `${cam.x}px ${cam.y}px`,
+      }}
+    >
+        <div className="absolute left-0 top-0" style={{ width: CANVAS_W, height: canvasH, transformOrigin: "0 0", transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` , willChange: "transform" }}>
           <div className="pointer-events-none absolute inset-x-0 top-0 flex" aria-hidden="true" style={{ padding: "0 16px" }}>
             {["Agents", "Projects", "Services / resources"].map((label, i) => (
-              <span key={label} className="text-[11px] font-semibold uppercase tracking-[0.08em] text-(--muted-2)" style={{ width: NODE_W, marginLeft: i === 0 ? 0 : 40, paddingTop: 2 }}>{label}</span>
+              <span key={label} className="text-[11px] font-semibold uppercase tracking-[0.08em] text-(--muted-2)" style={{ width: NODE_W, marginLeft: i === 0 ? 0 : 56, paddingTop: 2 }}>{label}</span>
             ))}
           </div>
 
-          <svg width={CANVAS_W} height={canvasH} role="img" aria-label={`Topology graph: ${summary}. Edges colored by Guard state.`} style={{ position: "absolute", inset: 0 }}>
-            {edges.map((edge) => (
-              <g key={edge.id}>
-                <path
-                  d={edge.d}
-                  fill="none"
-                  stroke={EDGE_STROKE[edge.state]}
-                  strokeWidth={edge.state === "idle" ? 1 : 1.5}
-                  strokeLinecap="round"
-                  opacity={edge.state === "idle" ? 0.8 : 1}
-                  className={edge.state === "flowing" ? "topo-flow" : undefined}
-                />
-                <circle cx={edge.x2} cy={edge.y2} r={3.5} fill="var(--canvas)" stroke={EDGE_STROKE[edge.state]} strokeWidth={1.5} />
-              </g>
-            ))}
+          <svg width={CANVAS_W} height={canvasH} role="group" aria-label={`Topology graph: ${summary}. Lines colored by routing state.`} style={{ position: "absolute", inset: 0 }}>
+            {edges.map((edge) => {
+              const connectionId = edge.id.startsWith("svc-") ? edge.id.slice(4) : null;
+              const picked = connectionId != null && selectedEdge === connectionId;
+              return (
+                <g key={edge.id}>
+                  <path
+                    d={edge.d}
+                    fill="none"
+                    stroke={EDGE_STROKE[edge.state]}
+                    strokeWidth={picked ? 3 : 1.5}
+                    strokeLinecap="round"
+                    opacity={edge.state === "idle" && !picked ? 0.55 : 1}
+                    className={edge.state === "flowing" ? "topo-flow" : undefined}
+                  >
+                    <title>{`${EDGE_LABEL[edge.state]} · ${edge.label}`}</title>
+                  </path>
+                  {edge.state === "flowing" && (
+                    <circle r={3} fill="var(--green)" style={{ pointerEvents: "none" }}>
+                      <animateMotion dur="2.6s" repeatCount="indefinite" path={edge.d} />
+                    </circle>
+                  )}
+                  {(edge.state === "blocked" || edge.state === "warned") && (
+                    <g style={{ pointerEvents: "none" }} transform={`translate(${edge.mx} ${edge.my})`}>
+                      <circle r={9} fill={edge.state === "blocked" ? "var(--red-bg)" : "var(--orange-bg)"} stroke={EDGE_STROKE[edge.state]} strokeWidth={1.25} />
+                      <path d={edge.state === "blocked" ? "M -3 -3 L 3 3 M 3 -3 L -3 3" : "M 0 -4 L 0 1 M 0 3.6 L 0 3.7"} stroke={EDGE_STROKE[edge.state]} strokeWidth={1.6} strokeLinecap="round" fill="none" />
+                    </g>
+                  )}
+                  <circle cx={edge.x2} cy={edge.y2} r={3.5} fill="var(--canvas)" stroke={EDGE_STROKE[edge.state]} strokeWidth={1.5} />
+                  {connectionId && onSelectEdge && (
+                    <path
+                      d={edge.d}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      style={{ cursor: "pointer" }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Select this link"
+                      aria-pressed={picked}
+                      onClick={() => onSelectEdge(picked ? null : connectionId)}
+                      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectEdge(picked ? null : connectionId); } }}
+                    />
+                  )}
+                </g>
+              );
+            })}
           </svg>
+
+          {agents.length === 0 && (
+            <article className="absolute rounded-[10px] border border-dashed border-(--line) bg-(--panel) p-3" style={{ left: COL_X[0], top: colY(1, 0, AGENT_H), width: NODE_W, height: AGENT_H }} aria-label="No live sessions">
+              <p className="text-[13px] font-semibold text-(--text)">No live sessions</p>
+              <p className="mt-1 text-[12px] leading-[1.5] text-(--muted)">Agents appear here the moment one calls through Nexus.</p>
+            </article>
+          )}
+          {agents.map((agent, i) => {
+            const active = agent.lastTs != null && Date.now() - new Date(agent.lastTs).getTime() < 10 * 60 * 1000;
+            const name = agentDisplayName(agent.agent);
+            const sel = { kind: "agent", id: agent.session } as const;
+            const dimmed = isDimmed(sel.kind, sel.id);
+            return (
+              <article
+                key={agent.session}
+                title={`Session ${agent.session}`}
+                className={`topo-node absolute rounded-[14px] border border-(--line) bg-(--panel) p-3 shadow-[var(--shadow-card)]${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
+                style={{ left: agentPos[i].x, top: agentPos[i].y, width: NODE_W, height: AGENT_H }}
+                aria-label={`${name} bound to ${projectDisplayName(agent.project)}`}
+                tabIndex={onSelectNode ? 0 : undefined}
+                role={onSelectNode ? "button" : undefined}
+                aria-pressed={onSelectNode ? selectedNode?.kind === "agent" && selectedNode.id === agent.session : undefined}
+                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
+                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
+                draggable={!!onRequestLink}
+                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
+                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
+                onDragLeave={onDragEnd}
+                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
+                onDragEnd={onDragEnd}
+                onDoubleClick={() => flyToNode(sel)}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="nx-tile" data-tone={sessionEdgeState(agent) === "blocked" ? "danger" : sessionEdgeState(agent) === "warned" ? "warning" : active ? "success" : undefined}><Icon name="agents" size={17} /></span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{name}</strong>
+                    <small className="block truncate text-[12px] text-(--muted)">{projectDisplayName(agent.project)} · {agent.environment}</small>
+                  </span>
+                  <span className="nx-badge shrink-0" data-tone={active ? "success" : "neutral"}><i aria-hidden="true" />{active ? "Active" : "Idle"}</span>
+                </div>
+                <p className="nx-mono mt-2 truncate text-(--muted-2)" title={`Session ${agent.session}`}>
+                  {agent.session.slice(0, 8)} · {agent.decisions} call{agent.decisions === 1 ? "" : "s"} · {agent.blocked} flagged
+                </p>
+                <p className="truncate text-[11.5px] text-(--muted-2)">{agent.lastOperation} · {timeAgoShort(agent.lastTs)}</p>
+              </article>
+            );
+          })}
+
+          {visibleProjects.map((project, i) => {
+            const warnings = pendingFor(project);
+            const blocked = blockedProjectIds.has(project.id);
+            const sel = { kind: "project", id: project.id } as const;
+            const dimmed = isDimmed(sel.kind, sel.id);
+            return (
+              <article
+                key={project.id}
+                className={`topo-node absolute rounded-[14px] border border-(--line) bg-(--panel) p-3 shadow-[var(--shadow-card)]${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
+                style={{ left: projectPos[i].x, top: projectPos[i].y, width: NODE_W, height: PROJECT_H }}
+                aria-label={`Project ${project.name}, ${project.environment}`}
+                tabIndex={onSelectNode ? 0 : undefined}
+                role={onSelectNode ? "button" : undefined}
+                aria-pressed={onSelectNode ? selectedNode?.kind === "project" && selectedNode.id === project.id : undefined}
+                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
+                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
+                draggable={!!onRequestLink}
+                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
+                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
+                onDragLeave={onDragEnd}
+                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
+                onDragEnd={onDragEnd}
+                onDoubleClick={() => flyToNode(sel)}
+              >
+                {warnings > 0 && (
+                  <span className={`topo-warn-dot${blocked ? " is-blocked" : ""}`} title={`${warnings} waiting · ${blocked ? "blocked traffic" : "awaiting review"}`}>
+                    {warnings > 9 ? "9+" : warnings}
+                  </span>
+                )}
+                <div className="flex items-center gap-2.5">
+                  <span className="nx-tile" aria-hidden="true"><Icon name="folder" size={17} /></span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{project.name}</strong>
+                    <small className="block truncate text-[12px] text-(--muted)">{(project.connections ?? []).length} service{(project.connections ?? []).length === 1 ? "" : "s"} · {warnings} waiting</small>
+                  </span>
+                  <span className="nx-badge shrink-0" data-tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "neutral"}>{project.environment}</span>
+                </div>
+                <p className="nx-mono mt-2 truncate text-(--muted-2)">{project.path}</p>
+              </article>
+            );
+          })}
+
+          {services.map(({ project, connection }, i) => {
+            const tier = tierForProvider(connection.provider);
+            const accountLabel = accountLabelForConnection(connection, accounts) ?? "—";
+            const resource = connection.resource ?? connection.target;
+            const sel = { kind: "service", id: connection.id } as const;
+            const dimmed = isDimmed(sel.kind, sel.id);
+            return (
+              <article
+                key={connection.id}
+                className={`topo-node absolute rounded-[14px] border border-(--line) bg-(--panel) p-3 shadow-[var(--shadow-card)]${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
+                style={{ left: servicePos[i].x, top: servicePos[i].y, width: NODE_W, height: SERVICE_H }}
+                aria-label={`${connection.provider} ${resource} for ${project.name}`}
+                tabIndex={onSelectNode ? 0 : undefined}
+                role={onSelectNode ? "button" : undefined}
+                aria-pressed={onSelectNode ? selectedNode?.kind === "service" && selectedNode.id === connection.id : undefined}
+                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
+                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
+                draggable={!!onRequestLink}
+                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
+                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
+                onDragLeave={onDragEnd}
+                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
+                onDragEnd={onDragEnd}
+                onDoubleClick={() => flyToNode(sel)}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="nx-tile" data-tone={categoryTile(connection.provider).tone === "neutral" ? undefined : categoryTile(connection.provider).tone} aria-hidden="true"><Icon name={categoryTile(connection.provider).icon} size={17} /></span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{connection.provider}</strong>
+                    <small className="block truncate text-[12px] text-(--muted)">{accountLabel}</small>
+                  </span>
+                  <span className="nx-badge shrink-0" data-tone={tier === "native" ? "success" : tier === "curated" ? "info" : "warning"}>{tier}</span>
+                </div>
+                <p className="mt-2 flex items-center gap-2">
+                  <span className="nx-mono min-w-0 truncate text-(--text)">{resource}</span>
+                  {sharedConnectionIds?.has(connection.id) && <span className="nx-badge shrink-0" data-tone="warning" title="This account is also bound to another project">Shared</span>}
+                </p>
+                <p className="truncate text-[11.5px] text-(--muted-2)">{project.name}{connection.environment ? ` · ${connection.environment}` : ""}</p>
+              </article>
+            );
+          })}
+        </div>
 
           {selectedNode && detailsSlot != null && (
             <div
-              className="absolute z-10 max-h-[70%] w-[240px] overflow-y-auto rounded-[10px] border border-(--line) bg-(--panel) p-3"
+              className="absolute z-10 max-h-[70%] w-[240px] overflow-y-auto rounded-[14px] border border-(--line) bg-(--panel) p-3 shadow-[var(--shadow-card)]"
               style={{ right: 12, top: 24 }}
               role="complementary"
               aria-label="Selected node details"
@@ -452,157 +705,66 @@ export function TopologyGraph({ projects, sessions, entries, accounts, environme
             </div>
           )}
 
-          {agents.length === 0 && (
-            <article className="absolute rounded-[10px] border border-dashed border-(--line) bg-(--panel) p-3" style={{ left: COL_X[0], top: colY(1, 0, AGENT_H), width: NODE_W, height: AGENT_H }} aria-label="No live sessions">
-              <p className="text-[13px] font-semibold text-(--text)">No live sessions</p>
-              <p className="mt-1 text-[12px] leading-[1.5] text-(--muted)">Agents appear here the moment one calls through Nexus.</p>
-            </article>
-          )}
-          {agents.map((agent, i) => {
-            const active = agent.lastTs != null && Date.now() - new Date(agent.lastTs).getTime() < 10 * 60 * 1000;
-            const name = agentDisplayName(agent.agent);
-            const sel = { kind: "agent", id: agent.session } as const;
-            const dimmed = isDimmed(sel.kind, sel.id);
-            return (
-              <article
-                key={agent.session}
-                title={`Session ${agent.session}`}
-                className={`topo-node absolute rounded-[10px] border border-(--line) bg-(--panel) p-3${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
-                style={{ left: agentPos[i].x, top: agentPos[i].y, width: NODE_W, height: AGENT_H }}
-                aria-label={`${name} bound to ${projectDisplayName(agent.project)}`}
-                tabIndex={onSelectNode ? 0 : undefined}
-                role={onSelectNode ? "button" : undefined}
-                aria-pressed={onSelectNode ? selectedNode?.kind === "agent" && selectedNode.id === agent.session : undefined}
-                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
-                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
-                draggable={!!onRequestLink}
-                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
-                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
-                onDragLeave={onDragEnd}
-                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
-                onDragEnd={onDragEnd}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-(--raised) text-[10px] font-semibold text-(--text)" aria-hidden="true">
-                    {agentInitials(name)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{name}</strong>
-                    <small className="text-[12px] text-(--muted)">{active ? "Active" : "Idle"}</small>
-                  </span>
-                </div>
-                <p className="mt-1.5 truncate text-[12px] tabular-nums text-(--muted)">
-                  {projectDisplayName(agent.project)} · {agent.environment}
-                </p>
-                <p className="truncate font-mono text-[11px] tabular-nums text-(--muted-2)" title={`Session ${agent.session}`}>
-                  ⌀ {agent.session.slice(0, 8)} · {agent.decisions} call{agent.decisions === 1 ? "" : "s"} · {agent.blocked} flagged · {agent.lastOperation} · {timeAgoShort(agent.lastTs)}
-                </p>
-              </article>
-            );
-          })}
-
-          {visibleProjects.map((project, i) => {
-            const warnings = pendingFor(project);
-            const blocked = blockedProjectIds.has(project.id);
-            const sel = { kind: "project", id: project.id } as const;
-            const dimmed = isDimmed(sel.kind, sel.id);
-            return (
-              <article
-                key={project.id}
-                className={`topo-node absolute rounded-[10px] border border-(--line) bg-(--panel) p-3${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
-                style={{ left: projectPos[i].x, top: projectPos[i].y, width: NODE_W, height: PROJECT_H }}
-                aria-label={`Project ${project.name}, ${project.environment}`}
-                tabIndex={onSelectNode ? 0 : undefined}
-                role={onSelectNode ? "button" : undefined}
-                aria-pressed={onSelectNode ? selectedNode?.kind === "project" && selectedNode.id === project.id : undefined}
-                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
-                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
-                draggable={!!onRequestLink}
-                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
-                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
-                onDragLeave={onDragEnd}
-                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
-                onDragEnd={onDragEnd}
-              >
-                {warnings > 0 && (
-                  <span className={`topo-warn-dot${blocked ? " is-blocked" : ""}`} title={`${warnings} waiting · ${blocked ? "blocked traffic" : "awaiting review"}`}>
-                    {warnings > 9 ? "9+" : warnings}
-                  </span>
-                )}
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-(--raised) text-[10px] font-semibold text-(--text)" aria-hidden="true">{project.initials}</span>
-                  <span className="min-w-0 flex-1">
-                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{project.name}</strong>
-                  </span>
-                  <span className="shrink-0 rounded-full bg-(--raised) px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em] text-(--muted)">{project.environment}</span>
-                </div>
-                <p className="mt-2 text-[12px] tabular-nums text-(--muted)">
-                  {(project.connections ?? []).length} service{(project.connections ?? []).length === 1 ? "" : "s"} · {warnings} waiting
-                </p>
-                <p className="truncate font-mono text-[11px] tabular-nums text-(--muted-2)">{project.path}</p>
-              </article>
-            );
-          })}
-
-          {services.map(({ project, connection }, i) => {
-            const tier = tierForProvider(connection.provider);
-            const accountLabel = accountLabelForConnection(connection, accounts) ?? "—";
-            const resource = connection.resource ?? connection.target;
-            const sel = { kind: "service", id: connection.id } as const;
-            const dimmed = isDimmed(sel.kind, sel.id);
-            return (
-              <article
-                key={connection.id}
-                className={`topo-node absolute rounded-[10px] border border-(--line) bg-(--panel) p-3${dimmed ? " topo-dim" : ""}${dropTarget === dragKey(sel) ? " topo-drop-target" : ""}`}
-                style={{ left: servicePos[i].x, top: servicePos[i].y, width: NODE_W, height: SERVICE_H }}
-                aria-label={`${connection.provider} ${resource} for ${project.name}`}
-                tabIndex={onSelectNode ? 0 : undefined}
-                role={onSelectNode ? "button" : undefined}
-                aria-pressed={onSelectNode ? selectedNode?.kind === "service" && selectedNode.id === connection.id : undefined}
-                onClick={onSelectNode ? () => toggleSelect(sel) : undefined}
-                onKeyDown={onSelectNode ? (event) => handleKey(sel, event) : undefined}
-                draggable={!!onRequestLink}
-                onDragStart={onRequestLink ? (event) => onDragStart(sel, event) : undefined}
-                onDragOver={onRequestLink ? (event) => onDragOver(sel, event) : undefined}
-                onDragLeave={onDragEnd}
-                onDrop={onRequestLink ? (event) => onDrop(sel, event) : undefined}
-                onDragEnd={onDragEnd}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-(--raised) text-[10px] font-semibold text-(--text)" aria-hidden="true">
-                    {connection.provider.slice(0, 2).toUpperCase()}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <strong className="block truncate text-[13px] font-semibold text-(--text)">{connection.provider}</strong>
-                    <small className="block truncate text-[12px] tabular-nums text-(--muted)">account: {accountLabel ?? "Not linked"}</small>
-                  </span>
-                  <span className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={tierBadge(tier)}>{tier === "self-added" ? "self-added" : tier}</span>
-                </div>
-                <p className="mt-2 truncate text-[13px] font-medium tabular-nums text-(--text)">{resource}</p>
-                <p className="truncate text-[12px] tabular-nums text-(--muted-2)">{project.name}{connection.environment ? ` · ${connection.environment}` : ""}</p>
-              </article>
-            );
-          })}
-        </div>
+      <div data-topo-overlay className="absolute bottom-4 left-4 z-10 flex max-w-[calc(50%-140px)] flex-wrap items-center gap-x-4 gap-y-1 rounded-[12px] border border-(--line) bg-(--panel) px-3 py-2 shadow-[var(--shadow-card)]" aria-label="Line legend" style={{ left: 16 }}>
+        {(Object.keys(EDGE_STROKE) as EdgeState[]).map((state) => (
+          <span key={state} className="flex items-center gap-1.5 text-[11.5px] text-(--muted)">
+            <span aria-hidden="true" style={{ display: "inline-block", width: 14, height: 2, borderRadius: 2, background: EDGE_STROKE[state] }} />
+            {EDGE_LABEL[state]}
+          </span>
+        ))}
+        {(visibleSessions.length > MAX_AGENTS || serviceBindings.length > MAX_SERVICES) && (
+          <span className="text-[11.5px] tabular-nums text-(--muted-2)">Showing {agents.length}/{visibleSessions.length} sessions, {services.length}/{serviceBindings.length} bindings</span>
+        )}
       </div>
 
-      {(visibleSessions.length > MAX_AGENTS || serviceBindings.length > MAX_SERVICES) && (
-        <p className="mt-2 text-[12px] tabular-nums text-(--muted-2)">
-          Showing {agents.length} of {visibleSessions.length} sessions and {services.length} of {serviceBindings.length} bindings — the busiest surface stays readable; the full lists live under Activity and Bindings.
-        </p>
-      )}
+      <div data-topo-overlay className="absolute bottom-[68px] left-4 z-10 rounded-[12px] border border-(--line) bg-(--panel) p-1.5 shadow-[var(--shadow-card)]" style={{ width: MM_W, height: MM_H, touchAction: "none" }} aria-label="Minimap. Click or drag to move the view."
+        onPointerDown={(event) => { try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* synthetic pointers have no capture */ } minimapMove(event); }}
+        onPointerMove={(event) => { if (event.buttons === 1) minimapMove(event); }}
+      >
+        <svg width={MM_W - 12} height={MM_H - 12} style={{ display: "block", cursor: "crosshair" }}>
+          {rects.map((rect) => (
+            <rect key={`${rect.kind}:${rect.id}`} x={rect.x * mmScale} y={rect.y * mmScale} width={rect.w * mmScale} height={rect.h * mmScale} rx={2} fill={selectedNode?.kind === rect.kind && selectedNode.id === rect.id ? "var(--text)" : "var(--raised)"} stroke="var(--line)" strokeWidth={0.75} />
+          ))}
+          <rect x={(-cam.x / cam.z) * mmScale} y={(-cam.y / cam.z) * mmScale} width={(vp.w / cam.z) * mmScale} height={(vp.h / cam.z) * mmScale} fill="none" stroke="var(--text)" strokeWidth={1.25} rx={2} />
+        </svg>
+      </div>
 
-      <p className="mt-2 shrink-0 text-[12px] leading-[1.6] text-(--muted-2)">
-        Read-only: this graph reflects bindings plus recent decisions. Make connections in the Services and Agents tabs — never by drawing on this canvas.
-      </p>
-      <details className="mt-2 max-h-[160px] shrink-0 overflow-y-auto rounded-[8px] border border-(--line) bg-(--panel) px-3 py-2 text-[12px] leading-[1.6] text-(--muted)">
-        <summary className="cursor-pointer font-medium text-(--text)">What this view still needs from the data model</summary>
-        <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-5">
-          <li>Agent names come from the name each agent declares in its MCP handshake (display only — a client can declare anything). Log lines written before that field existed show “Unknown agent” with their session id.</li>
-          <li>Live edge state: edges are derived from the polled audit log (same data layer as the list below), not a live event feed. A streaming feed would make “currently blocked” exact.</li>
-          <li>Presence: “Active / Idle” is recency of the last audit entry, not a live connection-status API.</li>
-        </ul>
-      </details>
+      <div data-topo-overlay className="absolute bottom-4 left-1/2 z-10 w-[240px] -translate-x-1/2">
+        {searchFocused && matches.length > 0 && (
+          <ul className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-[12px] border border-(--line) bg-(--panel) shadow-[var(--shadow-pop)]" role="listbox" aria-label="Matching nodes">
+            {matches.map((rect) => (
+              <li key={`${rect.kind}:${rect.id}`}>
+                <button type="button" className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] text-(--text) hover:bg-(--raised)" onMouseDown={(event) => { event.preventDefault(); jumpTo(rect); }}>
+                  <span className="truncate">{rect.label}</span>
+                  <span className="shrink-0 text-[11px] uppercase tracking-[0.06em] text-(--muted-2)">{rect.kind}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <label className="flex items-center gap-2 rounded-[12px] border border-(--line) bg-(--panel) px-3 py-2 shadow-[var(--shadow-card)]">
+          <Icon name="search" size={15} />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            onKeyDown={(event) => { if (event.key === "Enter" && matches[0]) jumpTo(matches[0]); if (event.key === "Escape") { setQuery(""); searchRef.current?.blur(); } event.stopPropagation(); }}
+            placeholder="Find a node…"
+            aria-label="Find a node"
+            className="min-w-0 flex-1 bg-transparent text-[12.5px] text-(--text) outline-none placeholder:text-(--muted-2)"
+          />
+        </label>
+      </div>
+
+      <div data-topo-overlay className="absolute bottom-4 right-4 z-10 flex items-center gap-1 rounded-[12px] border border-(--line) bg-(--panel) p-1 shadow-[var(--shadow-card)]" role="group" aria-label="Zoom controls">
+        <Button isIconOnly size="sm" variant="ghost" aria-label="Zoom out" onPress={() => camera.zoomBy(1 / 1.25)}><Icon name="minus" size={15} /></Button>
+        <button type="button" className="nx-mono w-[52px] rounded-[8px] py-1 text-center text-(--text) hover:bg-(--raised)" aria-label="Reset view" title="Reset view" onClick={camera.resetView}>{Math.round(cam.z * 100)}%</button>
+        <Button isIconOnly size="sm" variant="ghost" aria-label="Zoom in" onPress={() => camera.zoomBy(1.25)}><Icon name="plus" size={15} /></Button>
+        <span className="mx-0.5 h-5 w-px bg-(--line)" aria-hidden="true" />
+        <Button isIconOnly size="sm" variant="ghost" aria-label="Fit whole graph" onPress={camera.fitAll}><Icon name="expand" size={15} /></Button>
+      </div>
     </div>
   );
 }
