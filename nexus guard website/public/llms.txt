@@ -2,63 +2,48 @@
 
 > Connect your agents once. Link your services once.
 
-Nexus is the single place where AI coding agents connect and the single place where
-services are linked. It works out which project an agent is working in and routes every
-call to the correct account and resource, so an agent can never reach another project's
-services. Built for a solo developer running several agents (Claude Code, Codex,
-OpenCode, and others) across several of their own projects. Status: MVP in progress,
-Linux first. Source of truth: the Notion paper "Nexus — Product & Technical Strategy".
+Nexus sits between AI coding agents and the services they use. It works out which
+project an agent is in and sends each call to that project's own account and resource,
+so an agent working on one project can't reach another project's services. Made for one
+developer running several agents (Claude Code, Codex, OpenCode) across several projects.
+Status: early build, Linux first.
 
 ## How it works
 
-Agent → Session → Project → Environment → Service → Account → Resource → Capability
+Agent → Project → Account → Resource
 
-1. Ask: the agent asks Nexus for a capability. It does not choose the project or credentials.
-2. Resolve (core routing, always on): Nexus resolves project and environment, then the bound
-   account and resource. No match, no registration, or an ambiguous signal is refused before
-   anything reaches a provider.
-3. Forward: Nexus relays the call with the bound account's credentials. Agents never hold keys.
-4. Log: routing decisions and forwarded calls go to a local, secret-free activity log.
+1. The agent asks Nexus for a service. It doesn't choose the project or the keys.
+2. Nexus finds the project, then the account and resource linked to it. If it can't tell,
+   or the project isn't registered, it refuses before any call is made.
+3. Nexus makes the call with that account's login. The agent never sees the key.
 
-- Supabase + Project A ≠ Supabase + Project B
-- Supabase + Production ≠ Supabase + Development
-- Supabase Account 1 + Resource X ≠ Supabase Account 2 + Resource X
+Same service in a different project means a different account. Production and
+development are kept apart too.
 
-## MVP scope
+## What is covered
 
-- Local desktop app and runtime (Linux first)
-- Project registry with `.nexus/project.json` (authoritative, secret-free)
-- Starting catalog of about 50 services (proposal, under review). Native adapters: Supabase, GitHub.
-  Others are Curated (generic MCP forwarding) or Self-added.
-- Services tab (link accounts once), Agents tab (connect and import agent CLIs), Bindings per project
-- All agents connect to one persistent local Nexus over HTTP (`http://localhost:<port>/mcp`)
-- Concurrent, isolated agent sessions; local activity log; topology view with drag-to-link and confirm
-- Agent-facing MCP surface: `nexus.context`, `nexus.request_access`, `nexus.execute`
-- Dark and light themes
+- About 50 popular services to start (list still under review).
+- Built-in, reviewed support for Supabase and GitHub. Other services connect through their
+  own MCP server and are protected at the account level, not the resource level, so use
+  one account per project for those.
+- Each project keeps a secret-free `.nexus/project.json`. Logins stay in the computer's
+  secure storage.
+- All agents connect to one local Nexus over HTTP. Claude Code and OpenCode report their
+  folder to Nexus. Codex doesn't, so its folder is pinned in config. If an agent reports
+  nothing, Nexus refuses.
+- A live map of agents, projects and service accounts, plus a simple local activity log.
 
-## Not in the MVP
+## What it is not
 
-- Guard (allow / warn / require approval / block, spend limits): post-MVP, possible paid feature
-- Catalog beyond ~50 services, SSO, RBAC, team features, compliance dashboards
-
-## What Nexus is not
-
-- Not a vault or password manager
-- Not an enterprise governance or compliance platform
-- Not a filesystem sandbox; its boundary is infrastructure access
-- An action outside Nexus is unmanaged, not protected
-
-## Honest limits
-
-- Native adapters (Supabase, GitHub) can pin calls to the bound resource.
-- Curated and Self-added services currently get account-level isolation, not resource-level.
-  Use one account per project for those.
+- Not a password manager, a company governance tool, or a file sandbox.
+- It can't see or stop anything an agent does without going through Nexus.
+- Guard (reviewing risky actions) may come later. It is not built.
 
 ## Pricing (proposal, not final)
 
-Free: up to 2 projects with core routing. Pro: about $10–12/month or $99/year. Team/Agency: later.
-Core routing stays free by design.
+Free: up to 2 projects. Pro: about $10–12 a month or $99 a year. Team/Agency: later.
+The core stays free.
 
-## Links
+## Link
 
 - Website: https://nexus-guard.nafaa-store.workers.dev

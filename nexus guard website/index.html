@@ -10,15 +10,15 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="icon" type="image/png" href="/nexus-symbol.png" />
     <link rel="apple-touch-icon" href="/nexus-symbol.png" />
-    <meta name="description" content="Nexus is the one place your AI coding agents connect and your services are linked. It routes every call to the right project's account, so an agent can never reach another project's services." />
+    <meta name="description" content="Nexus sits between your coding agents and your services and sends each agent to its own project's account, so one project's agent can't touch another's." />
     <meta property="og:title" content="Nexus : Connect your agents once. Link your services once." />
-    <meta property="og:description" content="Nexus routes every agent call to the account and resource bound to the project it is in. Wrong-project access is refused before any call is made." />
+    <meta property="og:description" content="Link your accounts once. Nexus sends every agent to the right project's account and refuses anything unclear." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="/og-card.png" />
     <meta property="og:site_name" content="Nexus" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Nexus : Connect your agents once. Link your services once." />
-    <meta name="twitter:description" content="Project-aware routing for AI coding agents. MVP in progress, Linux first." />
+    <meta name="twitter:description" content="Keeps each coding agent in its own project. Early build, Linux first." />
     <meta name="twitter:image" content="/og-card.png" />
     <title>Nexus : Connect your agents once. Link your services once.</title>
     <script>
@@ -33,14 +33,12 @@
     <div id="root"></div>
     <noscript>
       <h1>Nexus: connect your agents once. Link your services once.</h1>
-      <p>Nexus is the single place where AI coding agents connect and the single place where services are linked. It works out which project an agent is in and routes every call to that project's account and resource, so an agent can never reach another project's services. Status: MVP in progress, Linux first. This page needs JavaScript for the interactive parts; the summary below is the same content agents and search engines get without it.</p>
+      <p>Nexus sits between your coding agents and your services. It sends each agent to its own project's account, so an agent working on one project can't touch another's. It is an early build for Linux. This page needs JavaScript for the interactive parts; this is the same content in short.</p>
       <h2>How it works</h2>
-      <p>Agent → Session → Project → Environment → Service → Account → Resource → Capability. Supabase + Project A ≠ Supabase + Project B. Supabase + production ≠ Supabase + development. Nexus resolves the project, refuses anything unresolved or unregistered before any provider call, and forwards with the bound account's credentials. Agents never hold keys.</p>
-      <h2>MVP scope</h2>
-      <p>Local desktop app (Linux first); project registry with a secret-free .nexus/project.json; a starting catalog of about 50 services with native Supabase and GitHub adapters; account linking once in a Services tab; agents connect over one persistent local HTTP endpoint; isolated concurrent sessions; a local activity log. Guard (risk rules, approvals, spend limits) is post-MVP and a possible paid feature.</p>
-      <h2>Rules</h2>
-      <p>Only the developer can change bindings. Conflicting signals surface and ask; Nexus never silently guesses. Nexus is not a vault, an enterprise governance platform, or a filesystem sandbox. Anything outside Nexus is unmanaged, not protected.</p>
-      <p>Machine-readable brief: <a href="/llms.txt">llms.txt</a>.</p>
+      <p>The agent asks Nexus for a service. Nexus works out which project the agent is in, finds the account and resource linked to that project, and makes the call with that account's login. The agent never sees the key. If Nexus can't tell the project, or the project isn't registered, it refuses.</p>
+      <h2>What it covers</h2>
+      <p>About 50 popular services to start, with built-in support for Supabase and GitHub. Claude Code, Codex and OpenCode connect to one local Nexus. A risk-review layer called Guard may come later. Nexus is not a password manager or a file sandbox, and it can't protect anything an agent does without going through it.</p>
+      <p>Short version for machines: <a href="/llms.txt">llms.txt</a>.</p>
     </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>

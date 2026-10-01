@@ -178,10 +178,9 @@ function CommandLine({ command }: { command: string }) {
 
 const NAV = [
   { href: "#how", label: "How it works" },
-  { href: "#routing", label: "Routing" },
+  { href: "#routing", label: "See it work" },
   { href: "#services", label: "Services" },
   { href: "#agents", label: "Agents" },
-  { href: "#compare", label: "Compare" },
   { href: "#pricing", label: "Pricing" },
   { href: "#faq", label: "FAQ" },
 ];
@@ -285,11 +284,11 @@ function edge(x1: number, y1: number, x2: number, y2: number) {
 }
 
 const FEED: { text: string; tone: "green" | "red" }[] = [
-  { text: "Claude Code → Koupa → koupa-production · forwarded", tone: "green" },
-  { text: "Codex → Nabdh → nabdh-development · forwarded", tone: "green" },
-  { text: "Codex asked for koupa-production · refused, not bound to Nabdh", tone: "red" },
-  { text: "OpenCode → Nabdh → nabdh-backend · forwarded", tone: "green" },
-  { text: "Agent in ~/Projects/scratch · refused, unregistered project", tone: "red" },
+  { text: "Claude Code → Koupa → koupa-production · sent", tone: "green" },
+  { text: "Codex → Nabdh → nabdh-development · sent", tone: "green" },
+  { text: "Codex asked for koupa-production · refused, it belongs to Koupa", tone: "red" },
+  { text: "OpenCode → Nabdh → nabdh-backend · sent", tone: "green" },
+  { text: "Agent in an unknown folder · refused, not a registered project", tone: "red" },
 ];
 
 /* One data packet travelling along an edge. Visible only during its window of
@@ -331,8 +330,8 @@ function Topology() {
       <div className="topo-bar">
         <span className="label">Illustration · not live</span>
         <div className="seg" role="group" aria-label="Scenario">
-          <button type="button" aria-pressed={!attempt} onClick={() => setAttempt(false)}>Two projects</button>
-          <button type="button" aria-pressed={attempt} onClick={() => setAttempt(true)}>Cross-project attempt</button>
+          <button type="button" aria-pressed={!attempt} onClick={() => setAttempt(false)}>Normal</button>
+          <button type="button" aria-pressed={attempt} onClick={() => setAttempt(true)}>Wrong project</button>
         </div>
       </div>
 
@@ -424,7 +423,7 @@ function Topology() {
       </div>
 
       <div className="topo-foot">
-        <span><i className="dot green" /> flowing</span>
+        <span><i className="dot green" /> sent</span>
         <span><i className="dot" style={{ background: "var(--red)" }} /> refused</span>
         <span className="muted">Click a project to focus it.</span>
       </div>
@@ -446,7 +445,7 @@ function Hero() {
       <div className="container hero-grid">
         <div>
           <span className="status-line">
-            <i className="dot" /> Building in the open · MVP in progress · Linux first
+            <i className="dot" /> Early build · Linux first
           </span>
           <h1 aria-label="Connect your agents once. Link your services once.">
             {"Connect your agents once. Link your services once.".split(" ").map((w, i) => (
@@ -456,14 +455,14 @@ function Hero() {
             ))}
           </h1>
           <p className="lead">
-            Nexus sits between your coding agents and your services. It works out which project an agent is in and routes every call to that project's own account and resource, so an agent can never reach another project's services.
+            Nexus sits between your coding agents and your services. It sends each agent to its own project's account, so an agent working on one project can't touch another's.
           </p>
           <div className="cta-row">
             <a href="#waitlist" className="btn btn-primary">Get notified <ArrowRight size={14} weight="bold" /></a>
-            <a href="#routing" className="btn">See routing in action</a>
+            <a href="#routing" className="btn">See how it works</a>
           </div>
           <p className="fine">
-            For solo developers running several agents across several of their own projects. Not an enterprise governance tool.
+            Made for one developer running several agents across several projects.
           </p>
         </div>
         <Topology />
@@ -472,36 +471,36 @@ function Hero() {
   );
 }
 
-/* ---------- Problem (paper §1) ---------- */
+/* ---------- Problem ---------- */
 function Problem() {
   return (
     <section className="section" id="problem">
       <div className="container">
         <div className="section-head">
           <span className="label">The problem</span>
-          <h2>Every project has its own accounts. Agents grab the wrong one.</h2>
+          <h2>Agents keep grabbing the wrong project's account.</h2>
           <p className="lead">
-            Each project has its own Supabase, Clerk, GitHub and other accounts. Today you configure MCP servers inside every project, and agents end up reading or writing the wrong database, hitting production instead of development, or acting on Project B while believing they are in Project A. It gets worse with every extra agent.
+            You have several projects, and each has its own database, logins and keys. When an AI agent works on one, it can end up using another's: the wrong database, or production instead of development.
           </p>
         </div>
         <div className="grid grid-2">
           <div className="card compare-card">
-            <h3><span className="badge red">Without Nexus</span></h3>
+            <h3><span className="badge red">Today</span></h3>
             <ul className="list">
-              <li><span className="x">✕</span><span><strong>MCP servers configured per project.</strong> Each agent inherits whatever credentials happen to be nearby.</span></li>
-              <li><span className="x">✕</span><span><strong>Nothing checks the project.</strong> A Koupa agent can run a migration against Nabdh's database.</span></li>
-              <li><span className="x">✕</span><span><strong>Agents hold the keys.</strong> Once a key is in the agent's hands, nobody can catch a mistake or revoke access mid-session.</span></li>
+              <li><span className="x">✕</span><span><strong>Setup is copied into every project.</strong> Each agent uses whatever keys happen to be nearby.</span></li>
+              <li><span className="x">✕</span><span><strong>Nothing checks the project.</strong> An agent working on Koupa can change Nabdh's database.</span></li>
+              <li><span className="x">✕</span><span><strong>The agent holds the keys.</strong> Once it has them, nobody can stop a mistake.</span></li>
             </ul>
-            <pre className="code"><code><span className="t">$ cd ~/Projects/Koupa</span>{"\n"}<span className="t">agent → supabase.execute(...)</span>{"\n"}<span className="r">↳ used Nabdh's linked login. Wrong database, no warning.</span></code></pre>
+            <pre className="code"><code><span className="t">$ cd ~/Projects/Koupa</span>{"\n"}<span className="t">agent → update the database</span>{"\n"}<span className="r">↳ used Nabdh's login. Wrong database, no warning.</span></code></pre>
           </div>
           <div className="card compare-card">
             <h3><span className="badge green">With Nexus</span></h3>
             <ul className="list">
-              <li><span className="ok">✓</span><span><strong>Link each account once.</strong> No per-project MCP setup. Agents connect only to Nexus.</span></li>
-              <li><span className="ok">✓</span><span><strong>Routing is core and always on.</strong> Nexus resolves project, environment, account and resource before anything leaves your machine.</span></li>
-              <li><span className="ok">✓</span><span><strong>Agents never hold the key.</strong> Nexus forwards the call with the bound account's credentials, so it can refuse or revoke at any point.</span></li>
+              <li><span className="ok">✓</span><span><strong>Link each account once.</strong> No setup per project.</span></li>
+              <li><span className="ok">✓</span><span><strong>Nexus checks the project every time.</strong> If it can't tell, it says no.</span></li>
+              <li><span className="ok">✓</span><span><strong>The agent never sees your keys.</strong> Nexus makes the call for it.</span></li>
             </ul>
-            <pre className="code"><code><span className="t">$ cd ~/Projects/Koupa</span>{"\n"}<span className="t">agent → nexus.execute(service: "supabase")</span>{"\n"}<span className="g">↳ Koupa → production → Personal → koupa-production</span></code></pre>
+            <pre className="code"><code><span className="t">$ cd ~/Projects/Koupa</span>{"\n"}<span className="t">agent → update the database</span>{"\n"}<span className="g">↳ Koupa's own database, Koupa's own login.</span></code></pre>
           </div>
         </div>
       </div>
@@ -509,25 +508,13 @@ function Problem() {
   );
 }
 
-/* ---------- How it works (paper §2, §3) ---------- */
-const CHAIN = ["Agent", "Session", "Project", "Environment", "Service", "Account", "Resource", "Capability"];
+/* ---------- How it works ---------- */
+const CHAIN = ["Agent", "Project", "Account", "Resource"];
 
 const HOW_STEPS = [
-  { t: "Ask", d: "The agent asks Nexus for a capability, like \"I need Supabase access\". It does not choose the project or the credentials." },
-  { t: "Resolve", d: "Nexus resolves the active project and environment, then the account and resource bound to them. No match, no registration, or an ambiguous signal means it refuses before anything reaches a provider." },
-  { t: "Forward", d: "Nexus relays the call through the provider's MCP server or a native adapter, attaching the bound account's credentials. The result returns through Nexus." },
-  { t: "Log", d: "Every routing decision and forwarded call goes to a simple local activity log. Never raw credentials." },
-];
-
-const TERMS = [
-  ["Service", "An external provider Nexus can connect to.", "Supabase"],
-  ["Account", "One linked login at a provider, with a human label.", "\"Personal\", \"Acme Client\""],
-  ["Resource", "A specific thing inside an account.", "One Supabase project"],
-  ["Project", "A registered Nexus project, i.e. a codebase.", "Koupa"],
-  ["Environment", "Which stage of the project is active.", "development, production"],
-  ["Binding", "A project's link to exactly one account + resource per service.", "Koupa → Supabase / Personal / koupa-production"],
-  ["Session", "One connected agent, held server-side by Nexus.", "A Claude Code window"],
-  ["Capability", "Permission to invoke one operation through Nexus, in one session.", "\"Run this Supabase query\""],
+  { t: "The agent asks", d: "Your agent asks Nexus for a service, like Supabase. It doesn't pick the project or the keys." },
+  { t: "Nexus checks", d: "Nexus works out which project the agent is in, then finds the account and resource linked to that project. If it can't tell, or the project isn't registered, it says no." },
+  { t: "Nexus makes the call", d: "Nexus sends the request with that account's login and passes the result back. The agent never sees the key." },
 ];
 
 function HowItWorks() {
@@ -538,14 +525,10 @@ function HowItWorks() {
   useEffect(() => {
     if (REDUCED() || !chainRef.current) return;
     let timer = 0;
-    let visible = false;
-    const tick = () => {
-      setLit((n) => (n >= CHAIN.length + 2 ? -1 : n + 1));
-    };
+    const tick = () => setLit((n) => (n >= CHAIN.length + 2 ? -1 : n + 1));
     const io = new IntersectionObserver(([e]) => {
-      visible = e.isIntersecting;
       window.clearInterval(timer);
-      if (visible) timer = window.setInterval(tick, 420);
+      if (e.isIntersecting) timer = window.setInterval(tick, 480);
     });
     io.observe(chainRef.current);
     return () => {
@@ -559,13 +542,13 @@ function HowItWorks() {
       <div className="container">
         <div className="section-head">
           <span className="label">How it works</span>
-          <h2>Every request resolves through one chain.</h2>
+          <h2>Nexus picks the right account for you.</h2>
           <p className="lead">
-            A project binds to a specific account and resource per service, never to a bare provider name. The same provider name never means the same resource.
+            Every agent talks only to Nexus. Nexus follows one short path for each request.
           </p>
         </div>
 
-        <div className="chain" aria-label="Canonical chain" ref={chainRef}>
+        <div className="chain" aria-label="Agent, then project, then account, then resource" ref={chainRef}>
           {CHAIN.map((c, i) => (
             <span key={c} style={{ display: "contents" }}>
               <span className={`chip ${i <= lit ? "lit" : ""}`}>{c}</span>
@@ -573,8 +556,11 @@ function HowItWorks() {
             </span>
           ))}
         </div>
+        <p className="fine" style={{ marginTop: -4, marginBottom: 28 }}>
+          A resource is the exact thing inside an account, like one Supabase project.
+        </p>
 
-        <div className="grid grid-4">
+        <div className="grid grid-3">
           {HOW_STEPS.map((s, i) => (
             <div className="card" key={s.t}>
               <span className="step-num">0{i + 1}</span>
@@ -584,32 +570,10 @@ function HowItWorks() {
           ))}
         </div>
 
-        <div className="neq">
-          <div>Supabase + Project A <b>≠</b> Supabase + Project B</div>
-          <div>Supabase + Production <b>≠</b> Supabase + Development</div>
-          <div>Supabase Account 1 + Resource X <b>≠</b> Supabase Account 2 + Resource X</div>
-        </div>
-
-        <details className="terms">
-          <summary>Glossary: what each word in the chain means</summary>
-          <div className="table-wrap">
-            <table className="term-table">
-              <thead>
-                <tr><th>Term</th><th>Meaning</th><th>Example</th></tr>
-              </thead>
-              <tbody>
-                {TERMS.map(([t, m, e]) => (
-                  <tr key={t}><td>{t}</td><td>{m}</td><td className="mono">{e}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-
-        <div className="card" style={{ marginTop: 24 }}>
-          <h3>Nexus stays in the execution path</h3>
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3>Same service, different project, different account</h3>
           <p>
-            The agent calls through Nexus and Nexus forwards with the bound account's credentials. An agent is never handed a raw credential or a permanent, unsupervised connection to a provider. Otherwise Nexus could no longer catch a project mismatch or revoke access mid-session.
+            Koupa and Nabdh can both use Supabase and still get separate accounts. Production and development stay separate too, even inside one project.
           </p>
         </div>
       </div>
@@ -617,7 +581,37 @@ function HowItWorks() {
   );
 }
 
-/* ---------- Routing simulator (illustration of §3, §7) ---------- */
+/* ---------- Get started ---------- */
+function Setup() {
+  const steps = [
+    { t: "Add a project", d: "Pick its folder. Nexus saves a small file, .nexus/project.json, with no secrets in it." },
+    { t: "Link an account", d: "Sign in to Supabase or GitHub once. Your login is kept in your computer's secure storage." },
+    { t: "Connect an agent", d: "Run one command so the agent talks to Nexus. Nexus tests the connection." },
+    { t: "Watch it work", d: "Make a test call and see it reach the right place on the live map." },
+  ];
+  return (
+    <section className="section" id="setup">
+      <div className="container">
+        <div className="section-head">
+          <span className="label">Get started</span>
+          <h2>Four steps to your first call.</h2>
+          <p className="lead">The app walks you through these the first time you open it.</p>
+        </div>
+        <div className="grid grid-4">
+          {steps.map((s, i) => (
+            <div className="card" key={s.t}>
+              <span className="step-num">0{i + 1}</span>
+              <h3>{s.t}</h3>
+              <p>{s.d}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Routing examples ---------- */
 type Scenario = {
   id: string;
   title: string;
@@ -635,45 +629,42 @@ const SCENARIOS: Scenario[] = [
     id: "ok",
     title: "Right project",
     tone: "green",
-    badge: "Forwarded",
-    summary: "Claude Code in ~/Projects/Koupa asks for Supabase.",
+    badge: "Sent",
+    summary: "Claude Code, working in the Koupa folder, asks for Supabase.",
     trace: [
-      { t: "Session", s: "ok" },
-      { t: "Project: koupa", s: "ok" },
-      { t: "Env: production", s: "ok" },
+      { t: "Agent connected", s: "ok" },
+      { t: "Project: Koupa", s: "ok" },
+      { t: "Stage: production", s: "ok" },
       { t: "Account: Personal", s: "ok" },
       { t: "Resource: koupa-production", s: "ok" },
-      { t: "Forwarded", s: "ok" },
+      { t: "Call sent", s: "ok" },
     ],
     request: `{
   "method": "nexus.request_access",
-  "params": {
-    "service": "supabase"
-  }
+  "params": { "service": "supabase" }
 }`,
     response: `{
   "result": {
     "project": "koupa",
-    "environment": "production",
     "account": "Personal",
     "resource": "koupa-production",
-    "forwarded": true,
-    "credential_returned": false
+    "sent": true,
+    "key_shown_to_agent": false
   }
 }`,
-    why: "The agent named only the service. Nexus resolved the project from .nexus/project.json, found the binding, and forwards with that account's credentials. The key never reaches the agent.",
+    why: "The agent only named the service. Nexus found Koupa's own account and resource and made the call. The key never reached the agent.",
   },
   {
     id: "cross",
     title: "Wrong project",
     tone: "red",
     badge: "Refused",
-    summary: "Codex in ~/Projects/Nabdh asks for Koupa's database.",
+    summary: "Codex, working in the Nabdh folder, asks for Koupa's database.",
     trace: [
-      { t: "Session", s: "ok" },
-      { t: "Project: nabdh", s: "ok" },
-      { t: "Env: development", s: "ok" },
-      { t: "Resource: koupa-production", s: "fail" },
+      { t: "Agent connected", s: "ok" },
+      { t: "Project: Nabdh", s: "ok" },
+      { t: "Stage: development", s: "ok" },
+      { t: "koupa-production?", s: "fail" },
       { t: "Refused", s: "fail" },
     ],
     request: `{
@@ -686,54 +677,45 @@ const SCENARIOS: Scenario[] = [
     response: `{
   "error": {
     "message": "Refused",
-    "data": {
-      "reason": "resource_not_bound_to_project",
-      "session_project": "nabdh",
-      "requested": "koupa-production",
-      "bound_resource": "nabdh-development"
-    }
+    "reason": "That resource belongs to Koupa",
+    "this_project": "nabdh"
   }
 }`,
-    why: "koupa-production is bound to Koupa, and this session resolves to Nabdh. It is refused structurally, with no risk evaluation and no call to the provider.",
+    why: "koupa-production belongs to Koupa, and this agent is in Nabdh. Nexus says no right away, before anything reaches Supabase.",
   },
   {
     id: "unregistered",
-    title: "Unregistered folder",
+    title: "Unknown folder",
     tone: "red",
     badge: "Refused",
-    summary: "An agent in ~/Projects/scratch, which is not a registered project.",
+    summary: "An agent in a folder that isn't a registered project.",
     trace: [
-      { t: "Session", s: "ok" },
-      { t: "Project: none registered", s: "fail" },
+      { t: "Agent connected", s: "ok" },
+      { t: "Project: none found", s: "fail" },
       { t: "Refused", s: "fail" },
     ],
     request: `{
   "method": "nexus.request_access",
-  "params": {
-    "service": "supabase"
-  }
+  "params": { "service": "supabase" }
 }`,
     response: `{
   "error": {
     "message": "Refused",
-    "data": {
-      "reason": "unregistered_project",
-      "workspace": "~/Projects/scratch",
-      "hint": "Register this project in Nexus to bind services"
-    }
+    "reason": "This folder isn't a registered project",
+    "hint": "Add it in Nexus first"
   }
 }`,
-    why: "Discovering a project does not create it. Only the developer can register one, so Nexus refuses instead of guessing.",
+    why: "Only you can add a project. Nexus never creates one on its own or guesses.",
   },
   {
     id: "conflict",
-    title: "Conflicting signals",
+    title: "Mixed signals",
     tone: "amber",
     badge: "Asks you",
-    summary: "The folder's .nexus/project.json says Koupa, but its Git remote matches Nabdh.",
+    summary: "The project file says Koupa, but the Git remote says Nabdh.",
     trace: [
-      { t: "Session", s: "ok" },
-      { t: "Project: koupa vs nabdh", s: "warn" },
+      { t: "Agent connected", s: "ok" },
+      { t: "Koupa or Nabdh?", s: "warn" },
       { t: "Waiting for you", s: "warn" },
     ],
     request: `{
@@ -743,15 +725,12 @@ const SCENARIOS: Scenario[] = [
     response: `{
   "result": {
     "status": "conflict",
-    "signals": {
-      "project_file": "koupa",
-      "git_remote": "nabdh"
-    },
-    "action": "waiting for developer",
-    "forwarded": false
+    "project_file_says": "koupa",
+    "git_remote_says": "nabdh",
+    "sent": false
   }
 }`,
-    why: "When signals conflict, Nexus surfaces the conflict and asks. It never silently guesses, and nothing is forwarded until you confirm.",
+    why: "When the clues disagree, Nexus asks you instead of guessing. Nothing is sent until you decide.",
   },
 ];
 
@@ -761,7 +740,7 @@ function Routing() {
   const [shown, setShown] = useState(0);
   const done = shown >= s.trace.length;
 
-  /* Play the resolution step by step, then reveal Nexus's answer. */
+  /* Play the check step by step, then reveal Nexus's answer. */
   useEffect(() => {
     if (REDUCED()) {
       setShown(s.trace.length);
@@ -781,14 +760,14 @@ function Routing() {
     <section className="section" id="routing">
       <div className="container">
         <div className="section-head">
-          <span className="label">Routing</span>
-          <h2>Wrong-project access is impossible by construction.</h2>
+          <span className="label">See it work</span>
+          <h2>Wrong-project mistakes stop before they start.</h2>
           <p className="lead">
-            Routing is core and always on. Nothing here is a risk score. An unresolved or unregistered request is refused before any call is made. Pick a scenario. These are illustrations of the agent-facing MCP surface, not live output.
+            Pick a situation. These are examples, not live results.
           </p>
         </div>
 
-        <div className="sim-scenarios" role="group" aria-label="Scenarios">
+        <div className="sim-scenarios" role="group" aria-label="Situations">
           {SCENARIOS.map((x) => (
             <button key={x.id} type="button" className="sim-btn" aria-pressed={x.id === id} onClick={() => setId(x.id)}>
               <span className={`badge ${x.tone}`}>{x.badge}</span>
@@ -802,7 +781,7 @@ function Routing() {
             <span className={`badge ${s.tone}`}>{s.badge}</span>
             <p className="muted" style={{ marginTop: 0 }}>{s.summary}</p>
           </div>
-          <div className="trace" aria-label="Resolution steps">
+          <div className="trace" aria-label="Checks">
             {s.trace.map((step, i) => (
               <span key={`${s.id}-${i}`} className="trace-step">
                 <span className={`tr ${i < shown ? `on ${step.s}` : ""}`}>{step.t}</span>
@@ -812,20 +791,16 @@ function Routing() {
           </div>
           <div className="sim-cols">
             <div key={`${s.id}-req`} className="swap">
-              <span className="label">Agent → Nexus</span>
+              <span className="label">Agent asks</span>
               <pre className="code"><code>{s.request}</code></pre>
             </div>
             <div key={`${s.id}-res`} className={`swap ${done ? "" : "pending"}`}>
-              <span className="label">Nexus → Agent</span>
+              <span className="label">Nexus answers</span>
               <pre className="code"><code>{s.response}</code></pre>
             </div>
           </div>
           <div className={`sim-why ${done ? "" : "pending"}`}>{s.why}</div>
         </div>
-
-        <p className="fine">
-          The agent-facing surface stays small: <code>nexus.context</code>, <code>nexus.request_access</code> and <code>nexus.execute</code>.
-        </p>
       </div>
     </section>
   );
@@ -916,10 +891,10 @@ function Catalog() {
     <section className="section" id="services">
       <div className="container">
         <div className="section-head">
-          <span className="label">Service catalog</span>
-          <h2>About 50 of the most-used services on day one.</h2>
+          <span className="label">Services</span>
+          <h2>50 popular services to start with.</h2>
           <p className="lead">
-            Link each account once, with a human label like "Personal" or "Acme Client". Then bind account and resource per project, picking the resource from a live list fetched from that account, never typed by hand. If one account is bound to several projects, Nexus flags the shared blast radius.
+            Link an account once, then use it in any project. When you add it to a project you pick the exact database or repo from a list, so nothing is typed by hand. If one account ends up shared by several projects, Nexus points it out.
           </p>
         </div>
 
@@ -943,7 +918,7 @@ function Catalog() {
 
         {shown.length === 0 ? (
           <p className="empty">
-            No match in the starting catalog. Anything else can be added as a Self-added service after a one-time confirmation.
+            Not in the starting list. You can still add any service yourself.
           </p>
         ) : (
           <div className="svc-grid">
@@ -951,7 +926,7 @@ function Catalog() {
               <div className="svc" key={`${cat}-${s.name}`} style={{ ["--i" as string]: Math.min(i, 14) }}>
                 <div className="svc-top">
                   <strong>{s.name}</strong>
-                  <span className={`badge ${s.tier === "Native" ? "green" : ""}`}>{s.tier ?? "Curated"}</span>
+                  <span className={`badge ${s.tier === "Native" ? "green" : ""}`}>{s.tier === "Native" ? "Built-in" : "Catalog"}</span>
                 </div>
                 <small>{s.cats.join(" · ")}</small>
               </div>
@@ -969,159 +944,63 @@ function Catalog() {
 
         <div className="grid grid-3 tiers">
           <div className="card">
-            <span className="badge green">Native</span>
-            <h3 style={{ marginTop: 12 }}>Hand-built adapter</h3>
-            <p>Supabase and GitHub. Every operation reviewed.</p>
+            <span className="badge green">Built-in</span>
+            <h3 style={{ marginTop: 12 }}>Supabase and GitHub</h3>
+            <p>Made by hand and reviewed action by action.</p>
           </div>
           <div className="card">
-            <span className="badge">Curated</span>
-            <h3 style={{ marginTop: 12 }}>In the catalog</h3>
-            <p>The other ~48. Verified to exist, named, categorized, and connected through generic MCP forwarding. Operations are not individually reviewed.</p>
+            <span className="badge">Catalog</span>
+            <h3 style={{ marginTop: 12 }}>The other 48</h3>
+            <p>Connected through each service's own MCP server. Not reviewed action by action.</p>
           </div>
           <div className="card">
-            <span className="badge amber">Self-added</span>
-            <h3 style={{ marginTop: 12 }}>Add a service not in Nexus</h3>
-            <p>Unverified. You confirm once that Nexus has not reviewed it and accept the risk for your own additions.</p>
+            <span className="badge amber">Your own</span>
+            <h3 style={{ marginTop: 12 }}>Anything else</h3>
+            <p>Add any service yourself. You confirm that Nexus hasn't reviewed it.</p>
           </div>
         </div>
         <p className="fine">
-          The starting list is a proposal and still under review. Each entry must be verified to have a working MCP server before it ships. The catalog is bundled locally, so search works offline. It is meant to grow toward 300–500 entries later.
+          This list is a first draft and may change. Each service needs a working MCP server before it ships.
         </p>
       </div>
     </section>
   );
 }
 
-/* ---------- Agents (paper §6) ---------- */
+/* ---------- Agents ---------- */
 function Agents() {
   return (
     <section className="section" id="agents">
       <div className="container">
         <div className="section-head">
           <span className="label">Agents</span>
-          <h2>One local Nexus. Every agent points at it.</h2>
+          <h2>One Nexus on your computer. Every agent connects to it.</h2>
           <p className="lead">
-            Claude Code, Codex, OpenCode and others connect to a single persistent local Nexus over HTTP, never a separate subprocess per agent. One instance is what keeps sessions isolated from each other.
+            Claude Code, Codex and OpenCode all use the same local Nexus. One shared Nexus is what keeps their sessions apart.
           </p>
         </div>
 
         <div className="grid grid-2">
           <div className="card">
-            <span className="badge blue">Preferred</span>
-            <h3 style={{ marginTop: 12 }}>Official CLI command</h3>
-            <p>Where an agent has one, Nexus uses it instead of hand-editing config, so it inherits the agent's own validation.</p>
+            <span className="badge blue">Easiest</span>
+            <h3 style={{ marginTop: 12 }}>One command</h3>
+            <p>Use the agent's own command to point it at Nexus.</p>
             <CommandLine command="claude mcp add --transport http nexus http://localhost:3939/mcp" />
             <CommandLine command="codex mcp add --url http://localhost:3939/mcp nexus" />
           </div>
           <div className="card">
-            <span className="badge">Fallback</span>
-            <h3 style={{ marginTop: 12 }}>Semi-automatic config edit</h3>
-            <p>For agents without an add command, Nexus detects the config file, prepares the edit in memory, and shows a confirm/dismiss step with a diff.</p>
-            <ul className="list">
-              <li><span className="ok">✓</span><span>Nothing is written on dismiss</span></li>
-              <li><span className="ok">✓</span><span>A differing existing entry is an explicit replace, never a silent merge</span></li>
-              <li><span className="ok">✓</span><span>A timestamped backup is kept before any write</span></li>
-              <li><span className="ok">✓</span><span>Every path ends with a live test-connection check</span></li>
-            </ul>
-          </div>
-        </div>
-
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>Import the connections you already have</h3>
-          <p>Direct MCP servers keep running unmanaged unless you migrate them, so Nexus finds them first.</p>
-          <ol className="numbered">
-            <li><span><strong>Detect.</strong> Read the agent's MCP config or its list command.</span></li>
-            <li><span><strong>Classify.</strong> Match entries against known provider signatures.</span></li>
-            <li><span><strong>Extract where possible.</strong> A static token becomes a new Nexus account. An OAuth connection asks you to re-authenticate through Nexus.</span></li>
-            <li><span><strong>Remove the direct entry, with confirmation.</strong> Same diff and backup pattern.</span></li>
-            <li><span><strong>Keep the rest visible.</strong> Anything unsupported shows as "found, unmanaged", never ignored.</span></li>
-          </ol>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Guarantees and limits (paper §1, §8, §10) ---------- */
-function Guarantees() {
-  return (
-    <section className="section" id="guarantees">
-      <div className="container">
-        <div className="section-head">
-          <span className="label">Rules and limits</span>
-          <h2>What Nexus promises, and what it does not.</h2>
-        </div>
-        <div className="grid grid-3">
-          <div className="card">
-            <h3>You stay in control</h3>
-            <ul className="list">
-              <li><span className="ok">✓</span><span>Only you can change bindings or permissions. An agent can propose a mapping change, never approve it.</span></li>
-              <li><span className="ok">✓</span><span>Branch, workspace, and external <code>.nexus/project.json</code> changes need your confirmation.</span></li>
-              <li><span className="ok">✓</span><span>Conflicting signals surface and ask. Nexus never silently guesses.</span></li>
-            </ul>
+            <span className="badge">Or</span>
+            <h3 style={{ marginTop: 12 }}>Let Nexus edit the config</h3>
+            <p>For agents without a command, Nexus shows you the exact change first. It keeps a backup and only writes after you confirm.</p>
           </div>
           <div className="card">
-            <h3>Secret-free by design</h3>
-            <p>Each project keeps a secret-free <code>.nexus/project.json</code> binding file. Credentials live in OS secure storage.</p>
-            <pre className="code"><code>{`{
-  "project": "koupa",
-  "connections": {
-    "supabase": {
-      "account": "personal",
-      "resource": "koupa-production"
-    }
-  }
-}`}</code></pre>
+            <h3>How Nexus knows the folder</h3>
+            <p>Claude Code and OpenCode tell Nexus which folder they were started in. Codex doesn't, so its folder is pinned in the project's Codex config. If an agent tells Nexus nothing, Nexus says no.</p>
           </div>
           <div className="card">
-            <h3>Honest about isolation</h3>
-            <p>
-              <strong>Native adapters</strong> (Supabase, GitHub) understand each operation, so Nexus can pin every call to the bound resource. For <strong>Curated and Self-added</strong> services the guarantee today is account-level, not resource-level, so use one account per project for those. How to tighten this is an open question.
-            </p>
+            <h3>Already using MCP servers directly?</h3>
+            <p>Nexus finds them and offers to move them over. Anything it can't handle is listed as "found, not managed", never hidden.</p>
           </div>
-        </div>
-
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>What Nexus is not</h3>
-          <ul className="list">
-            <li><span className="x">✕</span><span><strong>Not a vault or password manager.</strong> It routes; it is not a general secrets store.</span></li>
-            <li><span className="x">✕</span><span><strong>Not an enterprise governance or compliance platform.</strong> Built for one developer, not for teams and SSO.</span></li>
-            <li><span className="x">✕</span><span><strong>Not a filesystem sandbox.</strong> Its boundary is infrastructure and provider access. Anything an agent does outside Nexus is unmanaged, not protected.</span></li>
-            <li><span className="x">✕</span><span><strong>Not (yet) a policy engine.</strong> Rollback of a provider-side action belongs to the provider.</span></li>
-          </ul>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- First five minutes (paper §12 onboarding) ---------- */
-function Setup() {
-  const steps = [
-    { t: "Register a project", d: "Name it and point to its folder. Nexus writes a secret-free .nexus/project.json. Discovering a project never creates one." },
-    { t: "Link an account once", d: "Sign in to Supabase or GitHub (the native adapters). The credential goes to OS secure storage, not to any project." },
-    { t: "Connect an agent", d: "One command points the agent at your local Nexus. Nexus then runs a live test-connection check." },
-    { t: "Watch the first line light up", d: "Make a harmless call and see it routed to the right resource in the topology. That is the proof moment." },
-  ];
-  return (
-    <section className="section" id="setup">
-      <div className="container">
-        <div className="section-head">
-          <span className="label">The first five minutes</span>
-          <h2>One project, one account, one agent, one proof.</h2>
-          <p className="lead">
-            Setup is built so the value shows up before the novelty wears off: each step adds a node to your graph, and the last one shows a real call finding its way.
-          </p>
-        </div>
-        <div className="grid grid-4">
-          {steps.map((s, i) => (
-            <div className="card" key={s.t}>
-              <span className="step-num">0{i + 1}</span>
-              <h3>{s.t}</h3>
-              <p>{s.d}</p>
-              {i === 2 && <CommandLine command="claude mcp add --transport http nexus http://localhost:3939/mcp" />}
-            </div>
-          ))}
         </div>
       </div>
     </section>
@@ -1131,26 +1010,26 @@ function Setup() {
 /* ---------- Comparison ---------- */
 function Compare() {
   const rows: [string, string, string, string][] = [
-    ["Built for", "Whoever set up the project", "Organizations and platform teams", "One developer running several agents across their own projects"],
-    ["Setup", "MCP servers and keys configured inside every project", "Central, managed by an admin", "Link each account once, bind per project"],
-    ["Wrong-project access", "Nothing checks it", "Not designed around one developer's several projects", "Refused before any call is made"],
-    ["Agent holds the credential", "Yes", "Varies by product", "Never. Nexus forwards with the bound account's credentials"],
+    ["Made for", "Anyone", "Companies and teams", "One developer with several projects"],
+    ["Setup", "Repeated in every project", "Done by an admin", "Link once, then bind per project"],
+    ["Wrong-project mistakes", "Nothing stops them", "Not their focus", "Blocked before any call"],
+    ["Agent holds the keys", "Yes", "Depends", "Never"],
   ];
   return (
     <section className="section" id="compare">
       <div className="container">
         <div className="section-head">
           <span className="label">Compared</span>
-          <h2>Why not what you already do?</h2>
+          <h2>Why not what you do now?</h2>
           <p className="lead">
-            MCP gateways from Composio, Cloudflare, Portkey, Kong and others are funded and aimed at enterprises. The gap Nexus starts in is smaller and specific: one developer, several of their own projects, several agents at once.
+            Big companies already have MCP gateways. Nexus is for one developer juggling several projects and several agents.
           </p>
         </div>
         <div className="card" style={{ padding: 0 }}>
           <div className="table-wrap">
             <table className="term-table compare-table">
               <thead>
-                <tr><th></th><th>Per-project config and .env</th><th>Enterprise MCP gateways</th><th className="us">Nexus</th></tr>
+                <tr><th></th><th>Keys and config in each project</th><th>Company MCP gateways</th><th className="us">Nexus</th></tr>
               </thead>
               <tbody>
                 {rows.map(([a, b, c, d]) => (
@@ -1160,8 +1039,83 @@ function Compare() {
             </table>
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Where it stands ---------- */
+function Roadmap() {
+  return (
+    <section className="section" id="roadmap">
+      <div className="container">
+        <div className="section-head">
+          <span className="label">Where it stands</span>
+          <h2>Early, and being tested on real projects first.</h2>
+        </div>
+        <div className="grid grid-3">
+          <div className="card">
+            <div className="phase-top"><span className="label">Now</span><span className="badge amber">In progress</span></div>
+            <h3>The Linux app</h3>
+            <p>Add projects, link accounts, connect agents, and watch it all on a live map. Still to prove: a full agent session from start to finish.</p>
+          </div>
+          <div className="card">
+            <div className="phase-top"><span className="label">Next</span><span className="badge">Soon</span></div>
+            <h3>Real-world test</h3>
+            <p>Use it on the author's own projects for 2–3 weeks. It passes if it stays switched on and catches at least one real mistake.</p>
+          </div>
+          <div className="card">
+            <div className="phase-top"><span className="label">Later</span><span className="badge">If it works</span></div>
+            <h3>More of everything</h3>
+            <p>More services, other developers, teams, and an optional extra called Guard that reviews risky actions.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Pricing proposal ---------- */
+function Pricing() {
+  return (
+    <section className="section" id="pricing">
+      <div className="container">
+        <div className="section-head">
+          <span className="label">Pricing · proposal</span>
+          <h2>The core stays free.</h2>
+          <p className="lead">
+            These plans are a proposal. Nothing is charged, and nothing will be until testing is done.
+          </p>
+        </div>
+        <div className="grid grid-3">
+          <div className="card plan">
+            <span className="label">Free</span>
+            <div className="price">$0</div>
+            <ul className="list">
+              <li><span className="ok">✓</span><span>Up to 2 projects</span></li>
+              <li><span className="ok">✓</span><span>Linking and routing</span></li>
+            </ul>
+          </div>
+          <div className="card plan featured">
+            <span className="label">Pro</span>
+            <div className="price">~$10–12 <small>/ month, or ~$99 / year</small></div>
+            <ul className="list">
+              <li><span className="ok">✓</span><span>Unlimited projects and accounts</span></li>
+              <li><span className="ok">✓</span><span>Longer history</span></li>
+              <li><span className="ok">✓</span><span>Guard, once it exists</span></li>
+            </ul>
+          </div>
+          <div className="card plan">
+            <span className="label">Team / Agency</span>
+            <div className="price">Later</div>
+            <ul className="list">
+              <li><span className="ok">✓</span><span>Shared projects</span></li>
+              <li><span className="ok">✓</span><span>Per-client logs to show clients</span></li>
+            </ul>
+          </div>
+        </div>
         <p className="fine">
-          Closest prior art is credroute, a CLI that resolves which identity to use per client, project and platform and verifies it before handoff. Nexus differs by never letting the agent hold the credential.
+          Freelancers and agencies, who work in clients' accounts, are the expected main users. We haven't decided between a subscription and a one-time license.
         </p>
       </div>
     </section>
@@ -1170,13 +1124,14 @@ function Compare() {
 
 /* ---------- FAQ ---------- */
 const FAQ: [string, string][] = [
-  ["Does my agent ever see my keys?", "No. The agent asks Nexus for a capability, and Nexus forwards the call using the bound account's credentials. Credentials live in OS secure storage."],
-  ["What if an agent bypasses Nexus?", "Then Nexus cannot see or stop it. Anything outside Nexus is unmanaged, not protected. That is why the import step finds direct MCP connections and offers to migrate them, with your confirmation."],
-  ["How does Nexus know which project an agent is in?", "From signals in priority order: an explicit .nexus/project.json, previously verified mappings, Git identity, then auto-discovery. Agent-stated intent is never enough on its own. How each agent reports its working directory over a shared HTTP endpoint is being verified per agent, and when a client sends nothing, Nexus refuses."],
-  ["Which agents work with it?", "Claude Code, Codex and OpenCode first, over MCP on a single local HTTP endpoint. Each agent's real MCP support is verified before Nexus builds against it."],
-  ["Is it a vault or a governance platform?", "No. It routes requests to the right account and resource. It is not a general secrets manager, an enterprise compliance tool, or a filesystem sandbox."],
-  ["What does it cost?", "Core routing stays free by design. The plans on this page are a proposal, and nothing is billed. An open-core model is under consideration."],
-  ["What platforms?", "Linux first."],
+  ["Does my agent ever see my keys?", "No. The agent asks Nexus, and Nexus makes the call with the right account's login. Your logins are kept in your computer's secure storage."],
+  ["What if an agent skips Nexus?", "Then Nexus can't see or stop what it does. Nexus only protects what goes through it. It can find direct connections and offer to move them over."],
+  ["How does Nexus know which project an agent is in?", "It reads the project file in the folder and checks the Git remote. Claude Code and OpenCode tell Nexus their folder. Codex doesn't, so its folder is pinned in config. If Nexus can't tell, or the clues disagree, it asks you instead of guessing."],
+  ["Is every service protected equally?", "Not yet. For Supabase and GitHub, Nexus checks each action against the project's own resource. For the other services it keeps the right account, but it can't see which resource inside that account the agent names. For those, use one account per project."],
+  ["Is it a password manager or a file sandbox?", "No. Nexus sends requests to the right account. It doesn't manage all your secrets, enforce company rules, or limit what an agent does to your files."],
+  ["Which computers does it run on?", "Linux first."],
+  ["What does it cost?", "The core stays free. The plans above are a proposal, and nothing is charged."],
+  ["Can I try it now?", "Not yet. Join the list below and you'll get an email when the first Linux build is ready."],
 ];
 
 function Faq() {
@@ -1185,7 +1140,7 @@ function Faq() {
       <div className="container">
         <div className="section-head">
           <span className="label">FAQ</span>
-          <h2>The questions worth asking first.</h2>
+          <h2>Questions people ask first.</h2>
         </div>
         <div className="faq">
           {FAQ.map(([q, a]) => (
@@ -1195,105 +1150,6 @@ function Faq() {
             </details>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Roadmap and status (paper §5, §9) ---------- */
-function Roadmap() {
-  return (
-    <section className="section" id="roadmap">
-      <div className="container">
-        <div className="section-head">
-          <span className="label">Roadmap and status</span>
-          <h2>Built for its author first, then validated.</h2>
-          <p className="lead">
-            The first user is the builder. Nexus runs against real projects (Koupa, Marché, Nabdh, Green Algeria) for 2–3 weeks. Success means it stays turned on after the novelty wears off and catches at least one real mistake. Failure means it gets disabled for being more friction than protection.
-          </p>
-        </div>
-        <div className="grid grid-4">
-          <div className="card">
-            <div className="phase-top"><span className="label">Phase 1</span><span className="badge green">Started</span></div>
-            <h3>Foundation</h3>
-            <p>Project registry, <code>.nexus/project.json</code>, workspace and repo detection.</p>
-          </div>
-          <div className="card">
-            <div className="phase-top"><span className="label">Phase 2</span><span className="badge amber">In progress</span></div>
-            <h3>Broker core</h3>
-            <p>Native adapters, generic MCP forwarding, concurrent sessions, the ~50 service catalog, and the topology view with drag-to-link.</p>
-          </div>
-          <div className="card">
-            <div className="phase-top"><span className="label">Phase 3</span><span className="badge">Next</span></div>
-            <h3>Validation</h3>
-            <p>Run it on the author's own projects and decide whether it earns a permanent place in the workflow.</p>
-          </div>
-          <div className="card">
-            <div className="phase-top"><span className="label">Phase 4</span><span className="badge">Only if it proves out</span></div>
-            <h3>Later</h3>
-            <p>Catalog growth toward 300–500 entries, other solo and indie users, team features, and Guard (see below).</p>
-          </div>
-        </div>
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>Guard: possible later, not built</h3>
-          <p>
-            Routing already makes cross-project access impossible. Guard would cover "right project, wrong move": allow, warn, require approval or block on destructive or production actions, plus spend limits for consumption-priced services. It was moved out of the MVP on 2026-09-28 and may become a paid layer if the MVP proves out.
-          </p>
-        </div>
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>What exists today</h3>
-          <p>
-            A Linux desktop app with navigation and a Home topology view (agents, projects, service accounts, edges for flowing, refused and no-traffic states). Agent names come from the MCP handshake, one server per session. Native adapters for Supabase and GitHub. Every other service is fail-closed for now. This is builder-reported status, not a released product, and end-to-end validation over the single HTTP transport is still pending.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Pricing proposal (paper §16) ---------- */
-function Pricing() {
-  return (
-    <section className="section" id="pricing">
-      <div className="container">
-        <div className="section-head">
-          <span className="label">Pricing · proposal</span>
-          <h2>Core routing stays free.</h2>
-          <p className="lead">
-            Routing is what makes the cross-project promise structural, so it is not something to sell. These plans are a proposal, not final. Nothing is billed, and no billing work starts before validation is complete.
-          </p>
-        </div>
-        <div className="grid grid-3">
-          <div className="card plan">
-            <span className="label">Free</span>
-            <div className="price">$0</div>
-            <ul className="list">
-              <li><span className="ok">✓</span><span>Up to 2 projects</span></li>
-              <li><span className="ok">✓</span><span>Core linking and routing</span></li>
-              <li><span className="ok">✓</span><span>Enough to feel the value</span></li>
-            </ul>
-          </div>
-          <div className="card plan featured">
-            <span className="label">Pro</span>
-            <div className="price">~$10–12 <small>/ month, or ~$99 / year</small></div>
-            <ul className="list">
-              <li><span className="ok">✓</span><span>Unlimited projects and linked accounts</span></li>
-              <li><span className="ok">✓</span><span>Longer activity history</span></li>
-              <li><span className="ok">✓</span><span>Guard, once it exists</span></li>
-            </ul>
-          </div>
-          <div className="card plan">
-            <span className="label">Team / Agency</span>
-            <div className="price">Later</div>
-            <ul className="list">
-              <li><span className="ok">✓</span><span>Shared projects and bindings</span></li>
-              <li><span className="ok">✓</span><span>Per-client audit logs you can show a client</span></li>
-            </ul>
-          </div>
-        </div>
-        <p className="fine">
-          Freelancers and small agencies managing client accounts are the expected strongest segment: an agent acting on the wrong client's account is a business problem. Subscription versus one-time license, and an open-core option for the routing core, are still undecided.
-        </p>
       </div>
     </section>
   );
@@ -1338,7 +1194,7 @@ function Waitlist() {
         <span className="label">Get notified</span>
         <h2>Be first to try it.</h2>
         <p className="lead">
-          One email, used only for launch news: the first Linux build, and the plans above once they are decided.
+          One email, used only for launch news.
         </p>
         {done ? (
           <p className="wl-msg ok" role="status">
@@ -1396,20 +1252,21 @@ function Footer({ theme }: { theme: Theme }) {
             <div>
               <span className="label">Product</span>
               <a href="#how">How it works</a>
-              <a href="#routing">Routing</a>
-              <a href="#services">Service catalog</a>
+              <a href="#routing">See it work</a>
+              <a href="#services">Services</a>
               <a href="#agents">Agents</a>
             </div>
             <div>
               <span className="label">Project</span>
-              <a href="#roadmap">Roadmap</a>
-              <a href="#pricing">Pricing proposal</a>
+              <a href="#roadmap">Where it stands</a>
+              <a href="#pricing">Pricing</a>
+              <a href="#faq">FAQ</a>
               <a href="/llms.txt">llms.txt</a>
             </div>
           </div>
         </div>
         <p className="footer-bottom">
-          MVP in progress. Linux first. Illustrations on this page are not live output, and plans and pricing are proposals.
+          Early build, Linux first. Examples on this page are illustrations, and plans and prices are proposals.
         </p>
       </div>
     </footer>
@@ -1430,13 +1287,12 @@ export default function App() {
       <main id="main">
         <Hero />
         <Problem />
-        <Setup />
         <HowItWorks />
+        <Setup />
         <Routing />
         <Catalog />
         <Agents />
         <Compare />
-        <Guarantees />
         <Roadmap />
         <Pricing />
         <Faq />
