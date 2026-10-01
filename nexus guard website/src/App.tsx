@@ -118,7 +118,7 @@ function useScrollReveal() {
     if (REDUCED() || !("IntersectionObserver" in window)) return;
     const els = Array.from(
       document.querySelectorAll<HTMLElement>(
-        "main > section:not(.hero) .section-head, main > section:not(.hero) .card, .prob-head, .prob-points > div, .chain, .neq div, .demo-left > *, .link-demo > *, .agent-facts > *, .plan-card, .sim-scenarios, .cat-toolbar, .chips, .term-table",
+        "main > section:not(.hero) .section-head, main > section:not(.hero) .card, .prob-head, .demo-left > *, .link-demo > *, .agent-facts > *, .plan-card, .sim-scenarios, .cat-toolbar, .chips, .term-table",
       ),
     );
     const io = new IntersectionObserver(
@@ -264,24 +264,27 @@ function Navbar({
    Read-only illustration. Line colors are status only.
    -------------------------------------------------------------------------- */
 type ProjectName = "Koupa" | "Nabdh";
+type Focus = { kind: "agent" | "project" | "service"; id: string } | null;
 
-const T_AGENTS: { id: string; name: string; sub: string; project: ProjectName; y: number }[] = [
-  { id: "claude", name: "Claude Code", sub: "session 1", project: "Koupa", y: 70 },
-  { id: "codex", name: "Codex", sub: "session 2", project: "Nabdh", y: 170 },
-  { id: "opencode", name: "OpenCode", sub: "session 3", project: "Nabdh", y: 270 },
+/* Column geometry: agents | projects | service accounts. */
+const AX = 6, PX = 222, SX = 438, W = 170, WS = 198, H = 60;
+const FOLDER_PATH = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z";
+
+const T_AGENTS: { id: string; name: string; logoIdx: number; project: ProjectName; y: number }[] = [
+  { id: "claude", name: "Claude Code", logoIdx: 0, project: "Koupa", y: 74 },
+  { id: "codex", name: "Codex", logoIdx: 1, project: "Nabdh", y: 176 },
+  { id: "opencode", name: "OpenCode", logoIdx: 2, project: "Nabdh", y: 278 },
 ];
 const T_PROJECTS: { name: ProjectName; sub: string; y: number }[] = [
-  { name: "Koupa", sub: "production", y: 110 },
-  { name: "Nabdh", sub: "development", y: 240 },
+  { name: "Koupa", sub: "production", y: 118 },
+  { name: "Nabdh", sub: "development", y: 246 },
 ];
-const T_SERVICES: { id: string; name: string; sub: string; tier: "BUILT-IN" | "CATALOG"; project: ProjectName; y: number }[] = [
-  { id: "k-sb", name: "Supabase · Personal", sub: "koupa-production", tier: "BUILT-IN", project: "Koupa", y: 50 },
-  { id: "k-gh", name: "GitHub · Personal", sub: "koupa", tier: "BUILT-IN", project: "Koupa", y: 130 },
-  { id: "n-sb", name: "Supabase · Client", sub: "nabdh-development", tier: "BUILT-IN", project: "Nabdh", y: 210 },
-  { id: "n-cv", name: "Convex · Personal", sub: "nabdh-backend", tier: "CATALOG", project: "Nabdh", y: 290 },
+const T_SERVICES: { id: string; svc: string; account: string; resource: string; tier: "BUILT-IN" | "CATALOG"; project: ProjectName; y: number }[] = [
+  { id: "k-sb", svc: "Supabase", account: "Personal", resource: "koupa-production", tier: "BUILT-IN", project: "Koupa", y: 52 },
+  { id: "k-gh", svc: "GitHub", account: "Personal", resource: "koupa", tier: "BUILT-IN", project: "Koupa", y: 132 },
+  { id: "n-sb", svc: "Supabase", account: "Client", resource: "nabdh-development", tier: "BUILT-IN", project: "Nabdh", y: 212 },
+  { id: "n-cv", svc: "Convex", account: "Personal", resource: "nabdh-backend", tier: "CATALOG", project: "Nabdh", y: 292 },
 ];
-
-const AX = 10, PX = 240, SX = 470, W = 180, H = 56;
 
 function edge(x1: number, y1: number, x2: number, y2: number) {
   const mx = (x1 + x2) / 2;
@@ -315,8 +318,21 @@ function Packet({ d, begin, from, to, color = "var(--green)" }: { d: string; beg
   );
 }
 
+/* A logo on a softly tinted tile, drawn inside the SVG. */
+function SvgTile({ x, y, logo, folder }: { x: number; y: number; logo?: Logo; folder?: boolean }) {
+  const color = logo?.color;
+  return (
+    <g>
+      <rect x={x} y={y} width="30" height="30" rx="9" fill={color ? `color-mix(in srgb, ${color} 16%, transparent)` : "var(--raised)"} />
+      <svg x={x + 6} y={y + 6} width="18" height="18" viewBox="0 0 24 24">
+        <path d={folder ? FOLDER_PATH : logo?.path} fill={folder ? "none" : color ?? "var(--text)"} stroke={folder ? "var(--muted)" : "none"} strokeWidth="1.8" strokeLinejoin="round" />
+      </svg>
+    </g>
+  );
+}
+
 function Topology() {
-  const [focus, setFocus] = useState<ProjectName | null>(null);
+  const [focus, setFocus] = useState<Focus>(null);
   const [attempt, setAttempt] = useState(false);
   const [feedIdx, setFeedIdx] = useState(0);
 
@@ -327,8 +343,72 @@ function Topology() {
   }, []);
 
   const projY = (n: ProjectName) => T_PROJECTS.find((p) => p.name === n)!.y;
-  const dimProject = (n: ProjectName) => focus !== null && focus !== n;
   const koupaSb = T_SERVICES[0];
+
+  /* What a focused node highlights: the path that runs through it. */
+  const active = useMemo(() => {
+    const agents = new Set<string>();
+    const projects = new Set<string>();
+    const services = new Set<string>();
+    if (!focus) {
+      T_AGENTS.forEach((a) => agents.add(a.id));
+      T_PROJECTS.forEach((p) => projects.add(p.name));
+      T_SERVICES.forEach((s) => services.add(s.id));
+    } else if (focus.kind === "project") {
+      projects.add(focus.id);
+      T_AGENTS.filter((a) => a.project === focus.id).forEach((a) => agents.add(a.id));
+      T_SERVICES.filter((s) => s.project === focus.id).forEach((s) => services.add(s.id));
+    } else if (focus.kind === "agent") {
+      const a = T_AGENTS.find((x) => x.id === focus.id)!;
+      agents.add(a.id);
+      projects.add(a.project);
+      T_SERVICES.filter((s) => s.project === a.project).forEach((s) => services.add(s.id));
+    } else {
+      const s = T_SERVICES.find((x) => x.id === focus.id)!;
+      services.add(s.id);
+      projects.add(s.project);
+      T_AGENTS.filter((a) => a.project === s.project).forEach((a) => agents.add(a.id));
+    }
+    return { agents, projects, services };
+  }, [focus]);
+
+  const focusText = useMemo(() => {
+    if (!focus) return null;
+    const names = (arr: string[]) => arr.join(", ");
+    if (focus.kind === "project") {
+      const ag = T_AGENTS.filter((a) => a.project === focus.id).map((a) => a.name);
+      const rs = T_SERVICES.filter((s) => s.project === focus.id).map((s) => s.resource);
+      return `${names(ag)} → ${focus.id} → ${names(rs)}`;
+    }
+    if (focus.kind === "agent") {
+      const a = T_AGENTS.find((x) => x.id === focus.id)!;
+      const rs = T_SERVICES.filter((s) => s.project === a.project).map((s) => s.resource);
+      return `${a.name} → ${a.project} → ${names(rs)}`;
+    }
+    const s = T_SERVICES.find((x) => x.id === focus.id)!;
+    const ag = T_AGENTS.filter((a) => a.project === s.project).map((a) => a.name);
+    return `${names(ag)} → ${s.project} → ${s.resource}`;
+  }, [focus]);
+
+  const toggle = (kind: "agent" | "project" | "service", id: string) =>
+    setFocus((cur) => (cur && cur.kind === kind && cur.id === id ? null : { kind, id }));
+  const isFocus = (kind: string, id: string) => focus?.kind === kind && focus.id === id;
+  const press = (kind: "agent" | "project" | "service", id: string) => ({
+    role: "button" as const,
+    tabIndex: 0,
+    "aria-pressed": isFocus(kind, id),
+    style: { cursor: "pointer" },
+    onClick: () => toggle(kind, id),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle(kind, id);
+      }
+    },
+  });
+
+  const agentEdgeOn = (a: (typeof T_AGENTS)[number]) => active.agents.has(a.id) && active.projects.has(a.project);
+  const svcEdgeOn = (s: (typeof T_SERVICES)[number]) => active.services.has(s.id) && active.projects.has(s.project);
 
   return (
     <div className="card topo">
@@ -341,103 +421,89 @@ function Topology() {
       </div>
 
       <div className="topo-scroll">
-      <svg viewBox="0 0 660 340" role="img" aria-label="Three agents connect to two projects, each bound to its own service accounts. Nexus routes each agent to its own project's resources.">
-        <text className="t-col" x={AX} y="16">AGENTS</text>
-        <text className="t-col" x={PX} y="16">PROJECTS</text>
-        <text className="t-col" x={SX} y="16">SERVICE ACCOUNTS</text>
+        <svg viewBox="0 0 642 340" role="group" aria-label="Agents, projects and service accounts. Each agent is routed to its own project's resources.">
+          <text className="t-col" x={AX + 4} y="16">AGENTS</text>
+          <text className="t-col" x={PX + 4} y="16">PROJECTS</text>
+          <text className="t-col" x={SX + 4} y="16">SERVICE ACCOUNTS</text>
 
-        {T_AGENTS.map((a) => (
-          <path
-            key={a.id}
-            className={`t-line green ${dimProject(a.project) ? "dim" : ""}`}
-            d={edge(AX + W, a.y, PX, projY(a.project))}
-          />
-        ))}
-        {T_SERVICES.map((s) => (
-          <path
-            key={s.id}
-            className={`t-line green ${dimProject(s.project) ? "dim" : ""}`}
-            d={edge(PX + W, projY(s.project), SX, s.y)}
-          />
-        ))}
-        {T_AGENTS.filter((a) => !dimProject(a.project)).map((a, i) => (
-          <Packet key={`pa-${a.id}`} d={edge(AX + W, a.y, PX, projY(a.project))} begin={i * 0.9} from={0.02} to={0.45} />
-        ))}
-        {T_SERVICES.filter((s) => !dimProject(s.project)).map((s, i) => (
-          <Packet key={`ps-${s.id}`} d={edge(PX + W, projY(s.project), SX, s.y)} begin={i * 0.9} from={0.5} to={0.95} />
-        ))}
-        {attempt && (
-          <g>
-            <path id="refused-path" className="t-line red" d={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 12)} />
-            <circle className="t-packet" r="3.5" fill="var(--red)" opacity="0">
-              <animate attributeName="opacity" values="0;1;0" keyTimes="0;0.02;0.62" calcMode="discrete" dur="3.6s" repeatCount="indefinite" />
-              <animateMotion dur="3.6s" repeatCount="indefinite" path={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 12)} keyPoints="0;0;0.55;0.55" keyTimes="0;0.02;0.55;1" calcMode="linear" />
-            </circle>
-            <text className="t-x" textAnchor="middle" dominantBaseline="central" opacity="0">
-              ✕
-              <animate attributeName="opacity" values="0;1;0" keyTimes="0;0.56;0.95" calcMode="discrete" dur="3.6s" repeatCount="indefinite" />
-              <animateMotion dur="3.6s" repeatCount="indefinite" path={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 12)} keyPoints="0.56;0.56" keyTimes="0;1" calcMode="linear" />
-            </text>
-            <text className="t-tag red" x={PX + W + 26} y={172}>REFUSED BEFORE ANY CALL</text>
-          </g>
-        )}
+          {T_AGENTS.map((a) => (
+            <path key={a.id} className={`t-line green ${agentEdgeOn(a) ? "" : "dim"}`} d={edge(AX + W, a.y, PX, projY(a.project))} />
+          ))}
+          {T_SERVICES.map((s) => (
+            <path key={s.id} className={`t-line green ${svcEdgeOn(s) ? "" : "dim"}`} d={edge(PX + W, projY(s.project), SX, s.y)} />
+          ))}
+          {T_AGENTS.filter(agentEdgeOn).map((a, i) => (
+            <Packet key={`pa-${a.id}`} d={edge(AX + W, a.y, PX, projY(a.project))} begin={i * 0.9} from={0.02} to={0.45} />
+          ))}
+          {T_SERVICES.filter(svcEdgeOn).map((s, i) => (
+            <Packet key={`ps-${s.id}`} d={edge(PX + W, projY(s.project), SX, s.y)} begin={i * 0.9} from={0.5} to={0.95} />
+          ))}
+          {attempt && (
+            <g>
+              <path className="t-line red" d={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 14)} />
+              <circle className="t-packet" r="3.5" fill="var(--red)" opacity="0">
+                <animate attributeName="opacity" values="0;1;0" keyTimes="0;0.02;0.62" calcMode="discrete" dur="3.6s" repeatCount="indefinite" />
+                <animateMotion dur="3.6s" repeatCount="indefinite" path={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 14)} keyPoints="0;0;0.55;0.55" keyTimes="0;0.02;0.55;1" calcMode="linear" />
+              </circle>
+              <text className="t-x" textAnchor="middle" dominantBaseline="central" opacity="0">
+                ✕
+                <animate attributeName="opacity" values="0;1;0" keyTimes="0;0.56;0.95" calcMode="discrete" dur="3.6s" repeatCount="indefinite" />
+                <animateMotion dur="3.6s" repeatCount="indefinite" path={edge(PX + W, projY("Nabdh"), SX, koupaSb.y + 14)} keyPoints="0.56;0.56" keyTimes="0;1" calcMode="linear" />
+              </text>
+              <text className="t-tag red" x={PX + W + 6} y={176}>REFUSED BEFORE ANY CALL</text>
+            </g>
+          )}
 
-        {T_AGENTS.map((a) => (
-          <g key={a.id} className={`t-node ${dimProject(a.project) ? "dim" : ""}`}>
-            <rect className="t-card" x={AX} y={a.y - H / 2} width={W} height={H} rx="12" />
-            <rect className="t-ic-a" x={AX + 12} y={a.y - 12} width="24" height="24" rx="6" />
-            <text className="t-name" x={AX + 46} y={a.y - 3}>{a.name}</text>
-            <text className="t-sub" x={AX + 46} y={a.y + 13}>{a.sub} · {a.project}</text>
-          </g>
-        ))}
+          {T_AGENTS.map((a) => (
+            <g key={a.id} className={`t-node ${active.agents.has(a.id) ? "" : "dim"}`} aria-label={`Follow ${a.name}`} {...press("agent", a.id)}>
+              <rect className={`t-card ${isFocus("agent", a.id) ? "focus" : ""}`} x={AX} y={a.y - H / 2} width={W} height={H} rx="14" />
+              <SvgTile x={AX + 12} y={a.y - 15} logo={AGENT_LOGOS[a.logoIdx]} />
+              <text className="t-name" x={AX + 54} y={a.y - 3}>{a.name}</text>
+              <text className="t-sub" x={AX + 54} y={a.y + 14}>{a.project} folder</text>
+            </g>
+          ))}
 
-        {T_PROJECTS.map((p) => (
-          <g
-            key={p.name}
-            className={`t-node ${dimProject(p.name) ? "dim" : ""}`}
-            role="button"
-            tabIndex={0}
-            aria-pressed={focus === p.name}
-            aria-label={`Focus ${p.name}`}
-            style={{ cursor: "pointer" }}
-            onClick={() => setFocus(focus === p.name ? null : p.name)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setFocus(focus === p.name ? null : p.name);
-              }
-            }}
-          >
-            <rect className={`t-card ${focus === p.name ? "focus" : ""}`} x={PX} y={p.y - H / 2} width={W} height={H} rx="12" />
-            <rect className="t-ic-p" x={PX + 12} y={p.y - 12} width="24" height="24" rx="6" />
-            <text className="t-name" x={PX + 46} y={p.y - 3}>{p.name}</text>
-            <text className="t-sub" x={PX + 46} y={p.y + 13}>{p.sub}</text>
-          </g>
-        ))}
+          {T_PROJECTS.map((p) => (
+            <g key={p.name} className={`t-node ${active.projects.has(p.name) ? "" : "dim"}`} aria-label={`Follow ${p.name}`} {...press("project", p.name)}>
+              <rect className={`t-card ${isFocus("project", p.name) ? "focus" : ""}`} x={PX} y={p.y - H / 2} width={W} height={H} rx="14" />
+              <SvgTile x={PX + 12} y={p.y - 15} folder />
+              <text className="t-name" x={PX + 54} y={p.y - 3}>{p.name}</text>
+              <text className="t-sub" x={PX + 54} y={p.y + 14}>{p.sub}</text>
+            </g>
+          ))}
 
-        {T_SERVICES.map((s) => (
-          <g key={s.id} className={`t-node ${dimProject(s.project) ? "dim" : ""}`}>
-            <rect className="t-card" x={SX} y={s.y - H / 2} width={W} height={H} rx="12" />
-            <rect className="t-ic-s" x={SX + 12} y={s.y - 12} width="24" height="24" rx="6" />
-            <text className="t-name" x={SX + 46} y={s.y - 3}>{s.name}</text>
-            <text className="t-sub" x={SX + 46} y={s.y + 13}>{s.sub}</text>
-            <text className={`t-tag ${s.tier === "BUILT-IN" ? "green" : "faint"}`} x={SX + W - 8} y={s.y - H / 2 + 12} textAnchor="end">{s.tier}</text>
-          </g>
-        ))}
-      </svg>
+          {T_SERVICES.map((s) => (
+            <g key={s.id} className={`t-node ${active.services.has(s.id) ? "" : "dim"}`} aria-label={`Follow ${s.svc} ${s.account}`} {...press("service", s.id)}>
+              <rect className={`t-card ${isFocus("service", s.id) ? "focus" : ""}`} x={SX} y={s.y - H / 2} width={WS} height={H} rx="14" />
+              <SvgTile x={SX + 12} y={s.y - 15} logo={SERVICE_ICON[s.svc]} />
+              <text className="t-name" x={SX + 54} y={s.y - 3}>{s.svc} · {s.account}</text>
+              <text className="t-sub" x={SX + 54} y={s.y + 14}>{s.resource}</text>
+              <text className={`t-tag ${s.tier === "BUILT-IN" ? "green" : "faint"}`} x={SX + WS - 12} y={s.y - H / 2 + 14} textAnchor="end">{s.tier}</text>
+            </g>
+          ))}
+        </svg>
       </div>
 
       <div className="topo-foot">
         <span><i className="dot green" /> sent</span>
         <span><i className="dot" style={{ background: "var(--red)" }} /> refused</span>
-        <span className="muted">Click a project to focus it.</span>
+        <span className="muted">Click any node to follow its path.</span>
       </div>
-      <div className="feed" aria-live="off">
-        <span className="label">Activity</span>
-        <span key={feedIdx} className={`feed-line ${FEED[feedIdx].tone}`}>
-          <i className="dot" style={{ background: FEED[feedIdx].tone === "green" ? "var(--green)" : "var(--red)" }} />
-          {FEED[feedIdx].text}
-        </span>
+      <div className="feed" aria-live="polite">
+        {focusText ? (
+          <>
+            <span className="label">Path</span>
+            <span key={focusText} className="feed-line">{focusText}</span>
+          </>
+        ) : (
+          <>
+            <span className="label">Activity</span>
+            <span key={feedIdx} className={`feed-line ${FEED[feedIdx].tone}`}>
+              <i className="dot" style={{ background: FEED[feedIdx].tone === "green" ? "var(--green)" : "var(--red)" }} />
+              {FEED[feedIdx].text}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -550,36 +616,126 @@ function Hero() {
 }
 
 /* ---------- Problem ---------- */
-function Problem() {
-  const today = [
-    { k: "cmd", t: "$ cd ~/Projects/Koupa" },
-    { k: "cmd", t: "agent › update the users table" },
-    { k: "dim", t: "→ found SUPABASE_KEY in a nearby .env" },
-    { k: "bad", t: "→ project: nabdh-development" },
-    { k: "bad", t: "✕ Changed the wrong database. No warning." },
-  ];
-  const withNexus = [
-    { k: "cmd", t: "$ cd ~/Projects/Koupa" },
-    { k: "cmd", t: "agent › update the users table" },
-    { k: "dim", t: "→ Nexus: project Koupa, stage production" },
-    { k: "ok", t: "→ account Personal · koupa-production" },
-    { k: "ok", t: "✓ Right database. The agent never saw a key." },
-  ];
-  const points = [
-    ["Setup is copied into every project", "Each agent uses whatever keys happen to be nearby."],
-    ["Nothing checks which project it is in", "An agent working on Koupa can change Nabdh's database."],
-    ["The agent holds the keys", "Once it has them, nobody can stop a mistake."],
-  ];
-  const pane = (label: string, tone: "bad" | "ok", lines: { k: string; t: string }[]) => (
-    <div className={`pane pane-${tone}`}>
-      <div className="pane-bar"><i className={`dot ${tone === "ok" ? "green" : ""}`} style={tone === "bad" ? { background: "var(--red)" } : undefined} /><span className="label">{label}</span></div>
-      <div className="pane-body">
-        {lines.map((l, i) => (
-          <div key={i} className={`ln ln-${l.k}`} style={{ ["--n" as string]: i }}>{l.t}</div>
-        ))}
-      </div>
-    </div>
+type PMode = "today" | "nexus";
+
+/* The mistake as a picture: one agent, one key, two databases. */
+function ProblemDiagram({ mode }: { mode: PMode }) {
+  const today = mode === "today";
+  const claude = AGENT_LOGOS[0];
+  const sb = SERVICE_ICON["Supabase"];
+  const fade = (on: boolean) => ({ opacity: on ? 1 : 0, transition: "opacity 0.5s var(--ease)" });
+  /* the key sits on the agent today, and inside Nexus once Nexus holds it */
+  const keyAt = today ? "translate(372px, 30px)" : "translate(201px, 174px)";
+  const pathToday = "M 260 76 C 260 150, 390 190, 390 286";
+  const pathA = "M 260 76 L 260 140";
+  const pathB = "M 260 204 C 260 252, 130 238, 130 286";
+
+  return (
+    <svg className="pd" viewBox="0 0 520 372" role="img" aria-label={today ? "Today: the agent carries its own key straight to Nabdh's database, with nothing checking it." : "With Nexus: Nexus holds the key, checks the project, and routes the call to Koupa's database."}>
+      {/* connections */}
+      <g key={mode}>
+        {today ? (
+          <>
+            <path className="t-line red" d={pathToday} />
+            <Packet d={pathToday} begin={0} from={0.04} to={0.9} color="var(--red)" />
+          </>
+        ) : (
+          <>
+            <path className="t-line green" d={pathA} />
+            <path className="t-line green" d={pathB} />
+            <Packet d={pathA} begin={0} from={0.02} to={0.36} />
+            <Packet d={pathB} begin={0} from={0.42} to={0.96} />
+          </>
+        )}
+      </g>
+
+      {/* the agent */}
+      <g>
+        <rect className="t-card" x="160" y="8" width="200" height="68" rx="16" />
+        <SvgTile x={174} y={27} logo={claude} />
+        <text className="t-name" x="216" y="38">Claude Code</text>
+        <text className="t-sub" x="216" y="56">~/Projects/Koupa</text>
+      </g>
+
+      {/* the gate: empty today, Nexus with it */}
+      <g style={fade(today)}>
+        <rect x="190" y="140" width="140" height="64" rx="16" fill="none" stroke="var(--line)" strokeWidth="1.5" strokeDasharray="5 5" />
+        <text className="t-sub" x="260" y="168" textAnchor="middle">Nothing here</text>
+        <text className="t-sub" x="260" y="184" textAnchor="middle">checks the project</text>
+      </g>
+      <g style={fade(!today)}>
+        <rect className="t-card" x="190" y="140" width="140" height="64" rx="16" style={{ stroke: "var(--green)", strokeWidth: 1.5 }} />
+        <image className="pd-logo-d" href="/nexus-symbol.png" x="202" y="150" width="22" height="22" />
+        <image className="pd-logo-l" href="/nexus-symbol-dark.png" x="202" y="150" width="22" height="22" />
+        <text className="t-name" x="232" y="167">Nexus</text>
+              </g>
+
+      {/* the key */}
+      <g style={{ transform: keyAt, transition: "transform 0.9s var(--ease)" }}>
+        <rect x="0" y="0" width="118" height="24" rx="12" fill="var(--amber-bg)" />
+        <circle cx="13" cy="12" r="4" fill="none" stroke="var(--amber)" strokeWidth="1.6" />
+        <path d="M 17 12 H 28 M 24 12 V 16" stroke="var(--amber)" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+        <text className="t-sub" x="34" y="16" style={{ fill: "var(--amber)", fontSize: 10 }}>SUPABASE_KEY</text>
+      </g>
+
+      {/* the two databases */}
+      {[
+        { x: 20, name: "koupa-production", sub: "Koupa's database", right: false },
+        { x: 280, name: "nabdh-development", sub: "Nabdh's database", right: true },
+      ].map((d) => {
+        const bad = today && d.right;
+        const good = !today && !d.right;
+        return (
+          <g key={d.name}>
+            <rect className="t-card" x={d.x} y="286" width="220" height="76" rx="16" style={{ stroke: bad ? "var(--red)" : good ? "var(--green)" : "var(--line)", strokeWidth: bad || good ? 2 : 1, transition: "stroke 0.5s" }} />
+            <SvgTile x={d.x + 16} y={309} logo={sb} />
+            <text className="t-name" x={d.x + 58} y="322">{d.name}</text>
+            <text className="t-sub" x={d.x + 58} y="340">{d.sub}</text>
+            <text x={d.x + 200} y="312" textAnchor="middle" style={{ fontSize: 16, fontWeight: 700, fill: bad ? "var(--red)" : "var(--green)", ...fade(bad || good) }}>{bad ? "✕" : "✓"}</text>
+          </g>
+        );
+      })}
+    </svg>
   );
+}
+
+function Problem() {
+  const [mode, setMode] = useState<PMode>("today");
+  const [auto, setAuto] = useState(true);
+  const [inView, setInView] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!rootRef.current || !("IntersectionObserver" in window)) return;
+    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting), { threshold: 0.4 });
+    io.observe(rootRef.current);
+    return () => io.disconnect();
+  }, []);
+
+  /* Flip between the two until the visitor takes over. */
+  useEffect(() => {
+    if (!auto || !inView || REDUCED()) return;
+    const id = window.setInterval(() => setMode((m) => (m === "today" ? "nexus" : "today")), 5600);
+    return () => window.clearInterval(id);
+  }, [auto, inView]);
+
+  const pick = (m: PMode) => {
+    setAuto(false);
+    setMode(m);
+  };
+
+  const notes: Record<PMode, [string, string][]> = {
+    today: [
+      ["Setup is copied into every project", "Each agent uses whatever keys happen to be nearby."],
+      ["Nothing checks which project it is in", "An agent working on Koupa can change Nabdh's database."],
+      ["The agent holds the keys", "Once it has them, nobody can stop a mistake."],
+    ],
+    nexus: [
+      ["Link each account once", "No setup per project."],
+      ["Nexus checks the project every time", "If it can't tell, it says no."],
+      ["The agent never sees your keys", "Nexus makes the call for it."],
+    ],
+  };
 
   return (
     <section className="section problem" id="problem">
@@ -592,124 +748,291 @@ function Problem() {
           </p>
         </div>
 
-        <div className="scene card">
-          {pane("Today", "bad", today)}
-          <span className="vs" aria-hidden="true">vs</span>
-          {pane("With Nexus", "ok", withNexus)}
-        </div>
-
-        <div className="prob-points">
-          {points.map(([t, d], i) => (
-            <div key={t}>
-              <span className="num">0{i + 1}</span>
-              <h3>{t}</h3>
-              <p>{d}</p>
+        <div className="card pstage" ref={rootRef}>
+          <div className="pstage-diagram">
+            <ProblemDiagram mode={mode} />
+          </div>
+          <div className="pstage-side">
+            <div className="seg" role="group" aria-label="Compare">
+              <button type="button" aria-pressed={mode === "today"} onClick={() => pick("today")}>Today</button>
+              <button type="button" aria-pressed={mode === "nexus"} onClick={() => pick("nexus")}>With Nexus</button>
             </div>
-          ))}
+            <ol className={`pnotes ${mode}`} key={mode}>
+              {notes[mode].map(([t, d], i) => (
+                <li key={t} style={{ ["--n" as string]: i }}>
+                  <span className="pmark" aria-hidden="true">{mode === "today" ? "✕" : "✓"}</span>
+                  <span><b>{t}</b><small>{d}</small></span>
+                </li>
+              ))}
+            </ol>
+            <div className={`pverdict ${mode}`} role="status" key={`v-${mode}`}>
+              {mode === "today" ? "Changed the wrong database. No warning." : "Right database. The agent never saw a key."}
+            </div>
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-/* ---------- How it works ---------- */
-const CHAIN = ["Agent", "Project", "Account", "Resource"];
-
-const HOW_STEPS = [
-  { t: "The agent asks", d: "Your agent asks Nexus for a service, like Supabase. It doesn't pick the project or the keys." },
-  { t: "Nexus checks", d: "Nexus works out which project the agent is in, then finds the account and resource linked to that project. If it can't tell, or the project isn't registered, it says no." },
-  { t: "Nexus makes the call", d: "Nexus sends the request with that account's login and passes the result back. The agent never sees the key." },
+/* ---------- How it works: the app's real first-run setup, replayed ---------- */
+const OB_STEPS = ["Register", "Link", "Connect", "See it work"] as const;
+/* How many beats each step plays before the demo moves on. */
+const OB_BEATS = [3, 4, 2, 5];
+const OB_CHECKS = [
+  { step: "Project file", detail: "Agents opening this folder resolve Koupa." },
+  { step: "HTTP reachable", detail: "Nexus HTTP is answering at http://localhost:3939/mcp." },
+  { step: "Session", detail: "A session resolved for this workspace." },
 ];
 
-function HowItWorks() {
-  const [lit, setLit] = useState(-1);
-  const chainRef = useRef<HTMLDivElement>(null);
-
-  /* Walk the chain link by link while it is on screen, then rest, then repeat. */
+/* Text that types itself in. The part not typed yet stays in the layout but is
+   invisible, so nothing jumps or re-wraps while it types. */
+function Typed({ text, on, instant, delay = 0 }: { text: string; on: boolean; instant: boolean; delay?: number }) {
+  const [n, setN] = useState(on && instant ? text.length : 0);
   useEffect(() => {
-    if (REDUCED() || !chainRef.current) return;
-    let timer = 0;
-    const tick = () => setLit((n) => (n >= CHAIN.length + 2 ? -1 : n + 1));
-    const io = new IntersectionObserver(([e]) => {
-      window.clearInterval(timer);
-      if (e.isIntersecting) timer = window.setInterval(tick, 480);
-    });
-    io.observe(chainRef.current);
+    if (!on) {
+      setN(0);
+      return;
+    }
+    if (instant) {
+      setN(text.length);
+      return;
+    }
+    let id = 0;
+    let i = 0;
+    const per = Math.min(34, Math.max(12, 1100 / text.length));
+    const start = window.setTimeout(() => {
+      id = window.setInterval(() => {
+        i += 1;
+        setN(i);
+        if (i >= text.length) window.clearInterval(id);
+      }, per);
+    }, delay);
     return () => {
-      io.disconnect();
-      window.clearInterval(timer);
+      window.clearTimeout(start);
+      window.clearInterval(id);
     };
+  }, [on, instant, text, delay]);
+  const typing = on && !instant && n < text.length;
+  return (
+    <>
+      {text.slice(0, n)}
+      {typing && <span className="caret" aria-hidden="true" />}
+      <span className="untyped" aria-hidden="true">{text.slice(n)}</span>
+    </>
+  );
+}
+
+function OnboardingDemo() {
+  const reduced = typeof window !== "undefined" && REDUCED();
+  const [pos, setPos] = useState({ step: reduced ? 3 : 0, beat: reduced ? OB_BEATS[3] : 0, hold: 0 });
+  const [auto, setAuto] = useState(!reduced);
+  const [inView, setInView] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { step, beat } = pos;
+  /* Typing only plays during autoplay. Once someone clicks, everything shows at once. */
+  const instant = !auto || reduced;
+
+  /* Start from step one when the demo scrolls into view. */
+  useEffect(() => {
+    if (!rootRef.current || !("IntersectionObserver" in window)) return;
+    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting), { threshold: 0.35 });
+    io.observe(rootRef.current);
+    return () => io.disconnect();
   }, []);
 
+  /* Autoplay: one beat at a time, a pause between steps, then loop. */
+  useEffect(() => {
+    if (!auto || !inView || REDUCED()) return;
+    const id = window.setInterval(() => {
+      setPos((p) => {
+        if (p.beat < OB_BEATS[p.step]) return { ...p, beat: p.beat + 1, hold: 0 };
+        const wait = p.step === 3 ? 7 : 2;
+        if (p.hold < wait) return { ...p, hold: p.hold + 1 };
+        return p.step === 3 ? { step: 0, beat: 0, hold: 0 } : { step: p.step + 1, beat: 0, hold: 0 };
+      });
+    }, 850);
+    return () => window.clearInterval(id);
+  }, [auto, inView]);
+
+  /* Clicking takes over: show that step fully played. */
+  function replay() {
+    setAuto(true);
+    setPos({ step: 0, beat: 0, hold: 0 });
+  }
+
+  function go(next: number) {
+    const to = Math.min(OB_STEPS.length - 1, Math.max(0, next));
+    setAuto(false);
+    setPos({ step: to, beat: OB_BEATS[to], hold: 0 });
+  }
+
+  const done = (i: number) => step > i || (step === i && beat >= OB_BEATS[i]);
+  const summaries = ["~/Projects/Koupa", "Supabase · koupa-production", "Claude Code", "Routed"];
+  const registered = step > 0 || beat >= 3;
+  const linked = step > 1 || (step === 1 && beat >= 4);
+  const agentOn = step > 2 || (step === 2 && beat >= 2);
+  const lit = step === 3 && beat >= 5;
+  const checksShown = step === 3 ? Math.max(0, Math.min(3, beat - 1)) : 0;
+  const claude = AGENT_LOGOS[0];
+  const line = (
+    <svg className="ob-conn" width="44" height="12" aria-hidden="true">
+      <line x1="0" y1="6" x2="44" y2="6" className={lit ? "ob-flow" : ""} stroke={lit ? "var(--green)" : "var(--line)"} strokeWidth="2" strokeDasharray={lit ? "6 6" : "3 4"} />
+    </svg>
+  );
+
+  return (
+    <div className="card ob" ref={rootRef} role="group" aria-label="The app's first-run setup, replayed">
+      <div className="ob-bar">
+        <img src="/nexus-symbol.png" alt="" className="ob-logo" />
+        <strong>Set up Nexus</strong>
+        <span className="muted">Step {step + 1} of 4</span>
+        <span className="ob-example label">Example</span>
+      </div>
+
+      <div className="ob-body">
+        <div className="ob-left">
+          <ol className="ob-steps" aria-label="Setup steps">
+            {OB_STEPS.map((label, i) => (
+              <li key={label}>
+                <button type="button" className={`ob-step ${i === step ? "now" : ""}`} onClick={() => go(i)}>
+                  <span className={`nx-check ${done(i) ? "done" : ""} ${i === step && !done(i) ? "now" : ""}`}>{done(i) ? <Check size={12} weight="bold" /> : i + 1}</span>
+                  <span className="ob-step-name">{label}</span>
+                  {done(i) && <span className="ob-sum mono"><Typed text={summaries[i]} on instant={instant} /></span>}
+                </button>
+              </li>
+            ))}
+          </ol>
+
+          <div className="ob-content" key={step}>
+            {step === 0 && (
+              <>
+                <h3>Register a project</h3>
+                <p>A project is a folder you work in. Nexus uses it to know which resources an agent may reach. Nothing secret is stored.</p>
+                <div className="ob-field"><span>Project folder</span><div className="ob-input mono"><Typed text="~/Projects/Koupa" on={beat >= 1} instant={instant} /></div></div>
+                <div className="ob-field"><span>Project name</span><div className="ob-input"><Typed text="Koupa" on={beat >= 2} instant={instant} /></div></div>
+                <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 3 ? "pressed" : ""}`}>{beat >= 3 ? "Continue" : "Register project"}</span></div>
+              </>
+            )}
+            {step === 1 && (
+              <>
+                <h3>Link a service</h3>
+                <p>Link one login, then bind the exact resource this project uses. Nexus refuses anything else.</p>
+                <div className="ob-box">
+                  <span className="label">1 · Link a login</span>
+                  <div className="ob-row">
+                    <div className="ob-field tight"><span>Service</span><div className="ob-input"><Typed text="Supabase" on={beat >= 1} instant={instant} /></div></div>
+                    <div className="ob-field tight"><span>Account label</span><div className="ob-input"><Typed text="personal" on={beat >= 1} instant={instant} delay={260} /></div></div>
+                    <span aria-hidden="true" className={`ob-btn ${beat >= 2 ? "pressed" : ""}`}>Link login</span>
+                  </div>
+                  {beat >= 2 && <span className="badge ob-pop"><Typed text="Supabase · personal" on instant={instant} /></span>}
+                </div>
+                <div className="ob-box">
+                  <span className="label">2 · Bind a resource</span>
+                  <div className="ob-row">
+                    <span aria-hidden="true" className={`ob-btn ${beat >= 3 ? "pressed" : ""}`}>+ Add a binding</span>
+                    <span className="ob-help">Opens the same dialog as Bindings, including browser approval for Supabase.</span>
+                  </div>
+                  {beat >= 4 && <div className="ob-bound ob-pop"><Check size={14} weight="bold" /><b>Supabase</b><code><Typed text="koupa-production" on instant={instant} /></code></div>}
+                </div>
+              </>
+            )}
+            {step === 2 && (
+              <>
+                <h3>Connect an agent</h3>
+                <p>Point one coding agent at Nexus instead of the provider. These are the agents found on this machine.</p>
+                <div className="ob-chips" aria-hidden="true">
+                  {["Claude Code", "Codex", "OpenCode"].map((n) => (
+                    <span key={n} className={`ob-chip ${beat >= 1 && n === "Claude Code" ? "on" : ""}`}>{n}</span>
+                  ))}
+                </div>
+                <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 2 ? "pressed" : ""}`}>{beat >= 1 ? "Connect Claude Code" : "Pick an agent"}</span><span className="ob-help">Runs its own command or writes the config for you, with a diff and a backup.</span></div>
+              </>
+            )}
+            {step === 3 && (
+              <>
+                <h3>See it work</h3>
+                <p>Nexus routes one harmless check the way an agent call would go: Claude Code, then Koupa, then its service.</p>
+                <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 1 ? "pressed" : ""}`}>{beat === 1 ? "Routing..." : beat >= 2 ? "Run it again" : "Run a test call"}</span></div>
+                {checksShown > 0 && (
+                  <ul className="ob-checks">
+                    {OB_CHECKS.slice(0, checksShown).map((c) => (
+                      <li key={c.step} className="ob-pop"><span className="nx-check done sm"><Check size={11} weight="bold" /></span><span><b>{c.step}</b><small><Typed text={c.detail} on instant={instant} /></small></span></li>
+                    ))}
+                  </ul>
+                )}
+                {lit && (
+                  <>
+                    <div className="ob-note ok ob-pop"><Typed text="Routed. The call resolved to koupa-production in your personal Supabase." on instant={instant} /></div>
+                    <div className="ob-note ob-pop"><Typed text="Without Nexus, an agent in Koupa could have reached Nabdh's resources. Here that call is refused before it leaves your machine." on instant={instant} delay={1250} /></div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="ob-nav">
+            <button type="button" className="ob-link" disabled={step === 0} onClick={() => go(step - 1)}>Back</button>
+            {step < 3 ? <button type="button" className="btn btn-primary ob-next" onClick={() => go(step + 1)}>Continue</button> : <button type="button" className="btn ob-next" onClick={replay}>Replay</button>}
+          </div>
+        </div>
+
+        <div className="ob-right" role="group" aria-label="Your graph">
+          <span className="label">Your graph · builds as you go</span>
+          <div className="ob-graph">
+            {!registered ? (
+              <p className="ob-empty">Register a project and it appears here.</p>
+            ) : (
+              <div className="ob-row-graph">
+                {agentOn && (
+                  <>
+                    <div className="ob-node ob-pop">
+                      <span className="ob-tile" style={{ background: lit ? "var(--green-bg)" : "var(--raised)" }}>
+                        <svg viewBox="0 0 24 24" style={{ width: 16, height: 16, fill: claude.color ?? "currentColor" }}><path d={claude.path} /></svg>
+                      </span>
+                      <span><b>Claude Code</b><small>Agent</small></span>
+                    </div>
+                    {line}
+                  </>
+                )}
+                <div className="ob-node ob-pop">
+                  <span className="ob-tile" style={{ background: "var(--raised)" }}><FolderSimple size={16} weight="bold" /></span>
+                  <span><b>Koupa</b><small>production</small></span>
+                </div>
+                {linked && (
+                  <>
+                    {line}
+                    <div className="ob-node ob-pop">
+                      <ServiceLogo name="Supabase" size={30} />
+                      <span><b>Supabase</b><small className="mono">koupa-production</small></span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {lit && (
+              <div className="ob-node ob-refused ob-pop">
+                <span className="ob-tile" style={{ background: "var(--red-bg)" }}><FolderSimple size={16} weight="bold" /></span>
+                <span><b>Nabdh · nabdh-development</b><small>Refused: another project</small></span>
+              </div>
+            )}
+          </div>
+          <p className="ob-foot">Step 1 adds the project, step 2 the service, step 3 the agent. In step 4 the lines light up.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HowItWorks() {
   return (
     <section className="section" id="how">
       <div className="container">
-        <div className="section-head">
-          <span className="label">How it works</span>
-          <h2>Nexus picks the right account for you.</h2>
-          <p className="lead">
-            Every agent talks only to Nexus. Nexus follows one short path for each request.
-          </p>
+        <div className="section-head stack">
+          <h2>Four steps from nothing to a routed call.</h2>
+          <p className="lead">This is the app's own first-run setup. Watch it play, or click through the steps.</p>
         </div>
-
-        <div className="chain" aria-label="Agent, then project, then account, then resource" ref={chainRef}>
-          {CHAIN.map((c, i) => (
-            <span key={c} style={{ display: "contents" }}>
-              <span className={`chip ${i <= lit ? "lit" : ""}`}>{c}</span>
-              {i < CHAIN.length - 1 && <span className={`arrow ${i < lit ? "lit" : ""}`} aria-hidden="true">→</span>}
-            </span>
-          ))}
-        </div>
-        <p className="fine" style={{ marginTop: -4, marginBottom: 28 }}>
-          A resource is the exact thing inside an account, like one Supabase project.
-        </p>
-
-        <div className="grid grid-3">
-          {HOW_STEPS.map((s, i) => (
-            <div className="card" key={s.t}>
-              <span className="step-num">0{i + 1}</span>
-              <h3>{s.t}</h3>
-              <p>{s.d}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>Same service, different project, different account</h3>
-          <p>
-            Koupa and Nabdh can both use Supabase and still get separate accounts. Production and development stay separate too, even inside one project.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Get started ---------- */
-function Setup() {
-  const steps = [
-    { t: "Add a project", d: "Pick its folder. Nexus saves a small file, .nexus/project.json, with no secrets in it." },
-    { t: "Link an account", d: "Sign in to Supabase or GitHub once. Your login is kept in your computer's secure storage." },
-    { t: "Connect an agent", d: "Run one command so the agent talks to Nexus. Nexus tests the connection." },
-    { t: "Watch it work", d: "Make a test call and see it reach the right place on the live map." },
-  ];
-  return (
-    <section className="section" id="setup">
-      <div className="container">
-        <div className="section-head">
-          <span className="label">Get started</span>
-          <h2>Four steps to your first call.</h2>
-          <p className="lead">The app walks you through these the first time you open it.</p>
-        </div>
-        <div className="grid grid-4">
-          {steps.map((s, i) => (
-            <div className="card" key={s.t}>
-              <span className="step-num">0{i + 1}</span>
-              <h3>{s.t}</h3>
-              <p>{s.d}</p>
-            </div>
-          ))}
-        </div>
+        <OnboardingDemo />
       </div>
     </section>
   );
@@ -1813,7 +2136,6 @@ export default function App() {
         <Hero />
         <Problem />
         <HowItWorks />
-        <Setup />
         <Routing />
         <Catalog />
         <Agents />
