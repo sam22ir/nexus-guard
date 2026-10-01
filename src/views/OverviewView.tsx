@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../vault";
-import { manifestAccountFor, type Account, type Project } from "../store";
-import { blastRadiusWarningsFor } from "../accounts";
+import { manifestAccountFor, tierForProvider, type Account, type Connection, type Project } from "../store";
+import { accountGroupKey, blastRadiusWarningsFor } from "../accounts";
+import { agentDisplayName } from "../topology";
 import { Button } from "@heroui/react";
-import { Icon as NxIcon } from "../ui";
+import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
 import { type View, type FolderInspection } from "../app/types";
-import { GUARD_VISIBLE, primaryBtn, secondaryBtn, smallBtn, ghostLink, badgeStyle } from "../app/styles";
-import { StatusDot, PageTitle, Card, CardHeading } from "../app/common";
+import { StatusDot, Card, CardHeading } from "../app/common";
 import { timeAgo, useAuditLog, AuditRow } from "../app/audit";
-import { ConnectionRow } from "../app/ConnectionRow";
 
 export function Overview({ project, projects, accounts, onView, onAddConnection, onConnectAgent }: { project: Project; projects: Project[]; accounts: Account[]; onView: (view: View) => void; onAddConnection: () => void; onConnectAgent: () => void }) {
   const { entries } = useAuditLog(projects);
@@ -24,7 +23,6 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
   const allowed = mine.filter((e) => e.decision === "allow").length;
   const blocked = mine.filter((e) => e.decision !== "allow").length;
   const last = mine.length > 0 ? mine[mine.length - 1] : null;
-  const lastBlock = [...mine].reverse().find((e) => e.decision !== "allow");
   const live = connected.find((c) => c.provider === "Supabase" && c.projectRef);
   const protectedNow = connected.length > 0;
   const setupDone = connected.length > 0 && !!diskCheck?.nexus_project_id;
@@ -128,165 +126,147 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
     { done: !!diskCheck?.nexus_project_id, label: "Agents resolve it", detail: diskCheck ? (diskCheck.nexus_project_id ? `On disk as ${diskCheck.nexus_project}${(diskCheck.nexus_connections ?? []).length > 0 ? ` · ${(diskCheck.nexus_connections ?? []).map((c) => `${c.provider}:${c.resource ?? c.target ?? "?"}`).join(" · ")}` : ""}` : "No project file in that folder yet") : "Verify what agents opening the folder get" },
   ];
 
-  return (
-    <div className="app-view flex w-full min-h-0 flex-1 flex-col gap-4 overflow-visible">
-      <PageTitle
-        description={`${project.path} → ${project.name} · ${project.environment}`}
-        action={
-          <>
-            <Button size="sm" onPress={protectedNow ? onConnectAgent : onAddConnection}>
-              {protectedNow ? "Connect agent" : "Connect a service"}
-            </Button>
-            <Button size="sm" variant="outline" onPress={() => onView("bindings")}>Bindings</Button>
-          </>
-        }
-      />
+  const sharedKeys = new Set(blastWarnings.map((w) => w.accountKey));
+  const isShared = (c: Connection) => { const key = accountGroupKey(c.provider, c); return !!key && sharedKeys.has(key); };
+  const stepsDone = steps.filter((s) => s.done).length;
+  const statusTone: Tone = protectedNow ? "success" : pending.length > 0 ? "info" : "warning";
+  const statusLabel = protectedNow ? "Protected" : pending.length > 0 ? "Approval in browser" : "Setup needed";
+  const headline = protectedNow ? `Every call resolves to ${connected[0].resource ?? connected[0].target}` : pending.length > 0 ? "Finish the approval waiting in your browser" : "Connect one resource so agents reach the right project";
+  const agentsSeen = [...mine].reverse().reduce<{ name: string; last?: string | null; calls: number }[]>((list, entry) => {
+    if (!entry.agent) return list;
+    const found = list.find((a) => a.name === entry.agent);
+    if (found) found.calls += 1; else list.push({ name: entry.agent, last: entry.ts, calls: 1 });
+    return list;
+  }, []);
+  const tierTone = (tier: string): Tone => (tier === "native" ? "success" : tier === "curated" ? "info" : "warning");
 
-      <Card className="shrink-0">
-        <div className="flex flex-wrap items-center gap-5">
-          <span className="nx-tile" data-tone={protectedNow ? "success" : pending.length > 0 ? "info" : "warning"} style={{ width: 44, height: 44 }}>
-            <NxIcon name="shield" size={20} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="flex items-center gap-2 text-[12px] font-semibold">
-              <StatusDot tone={protectedNow ? "green" : pending.length > 0 ? "blue" : "orange"} />
-              <span style={{ color: protectedNow ? "var(--green)" : pending.length > 0 ? "var(--blue)" : "var(--orange)" }}>
-                {protectedNow ? "Protected" : pending.length > 0 ? "Approval in browser" : "Setup needed"}
-              </span>
-            </p>
-            <h2 className="mt-1 text-[16px] font-semibold leading-[1.3] tracking-[-0.01em] text-(--text)">
-              {protectedNow ? `Every call resolves to ${connected[0].resource ?? connected[0].target}` : pending.length > 0 ? "Finish the approval waiting in your browser" : "Connect one resource to guard this folder"}
-            </h2>
-            <p className="mt-1 max-w-[65ch] text-[13px] leading-[1.6] text-(--muted)">
-              {protectedNow ? "Agents on this folder get this resource only. Anything else is blocked before it reaches the provider." : "Two minutes: approve in the browser, pick the project, done."}
-            </p>
+  return (
+    <div className="app-view flex min-h-0 w-full flex-1 flex-col gap-3">
+      <Card className="shrink-0 !py-3">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+          <span className="nx-tile" data-tone={statusTone} style={{ width: 40, height: 40 }}><NxIcon name="shield" size={20} /></span>
+          <div className="min-w-[220px] flex-1">
+            <div className="flex items-center gap-2 text-[11.5px] font-medium" style={{ color: `var(--${statusTone === "success" ? "green" : statusTone === "info" ? "blue" : "orange"})` }}>
+              <StatusDot tone={statusTone === "success" ? "green" : statusTone === "info" ? "blue" : "orange"} />{statusLabel}
+            </div>
+            <h2 className="mt-0.5 text-[15px] font-semibold tracking-[-0.01em] text-(--text)">{headline}</h2>
+            <p className="mt-0.5 truncate text-[12px] text-(--muted)"><span className="nx-mono">{project.path}</span> · {project.environment}</p>
           </div>
-          <div className="flex min-w-[170px] flex-col gap-1 border-l border-(--line-soft) pl-5 text-[12px] tabular-nums text-(--muted)">
-            <span>Identity</span>
-            <strong className="font-semibold text-(--text)">{diskCheck?.nexus_project_id ? "On disk" : "Unverified"}</strong>
-            <span>Last guard call: {last ? `${decisionLabel(last.decision)} ${timeAgo(last.ts)}` : "never"}</span>
+          <dl className="flex gap-5 text-[12px] text-(--muted)">
+            <div><dt>Identity</dt><dd className="font-medium text-(--text)">{diskCheck?.nexus_project_id ? "On disk" : "Unverified"}</dd></div>
+            <div><dt>Last call</dt><dd className="font-medium text-(--text)">{last ? `${decisionLabel(last.decision)} ${timeAgo(last.ts)}` : "never"}</dd></div>
+            <div><dt>Calls</dt><dd className="font-medium text-(--text)">{mine.length === 0 ? "0" : `${allowed} allowed · ${blocked} blocked`}</dd></div>
+          </dl>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" isDisabled={verifying || !desktopAvailable()} onPress={() => void verifyOnDisk()}>{verifying ? "Checking…" : "Verify on disk"}</Button>
+            <Button size="sm" onPress={protectedNow ? onConnectAgent : onAddConnection}>{protectedNow ? "Connect agent" : "Connect a service"}</Button>
           </div>
         </div>
       </Card>
 
-      {blastWarnings.length > 0 && (
-        <details className="nx-card shrink-0 !py-3">
-          <summary className="cursor-pointer text-[13px] font-semibold text-(--text)">
-            Shared account warning — {blastWarnings.length} login{blastWarnings.length === 1 ? "" : "s"} used by other projects
-          </summary>
-          <ul className="mt-2 flex flex-col gap-1.5 text-[12px] leading-[1.6] tabular-nums text-(--muted)">
-            {blastWarnings.map((entry) => (
-              <li key={entry.accountKey}>
-                {entry.provider} · {entry.accountLabel} — also bound by {entry.projectIds.filter((id) => id !== project.id).map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") || "another project"}.
-                A compromised credential here reaches multiple workspaces.
-              </li>
-            ))}
-          </ul>
-        </details>
+      {(blastWarnings.length > 0 || (diskCheck && !diskDiffers)) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {blastWarnings.length > 0 && (
+            <button type="button" className="nx-badge cursor-pointer !px-3 !py-1.5 text-[12px]" data-tone="warning" onClick={() => onView("services")} title={blastWarnings.map((w) => `${w.provider} · ${w.accountLabel} is also bound by ${w.projectIds.filter((id) => id !== project.id).map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") || "another project"}`).join("\n")}>
+              {blastWarnings.length} login{blastWarnings.length === 1 ? " is" : "s are"} shared with other projects · Review
+            </button>
+          )}
+          {diskCheck && !diskDiffers && (
+            <span className="nx-badge !px-3 !py-1.5 text-[12px]" data-tone="success">
+              Folder matches the project file
+              <button type="button" aria-label="Dismiss" className="ml-1 opacity-70 hover:opacity-100" onClick={() => setDiskCheck(null)}><NxIcon name="x" size={12} /></button>
+            </span>
+          )}
+        </div>
       )}
 
-      {diskCheck && (
-        <Card className="shrink-0">
-          <CardHeading
-            eyebrow="Verify on disk"
-            title={diskDiffers ? "Folder differs — choose which wins" : "On disk matches"}
-            action={<button type="button" onClick={() => setDiskCheck(null)} className={ghostLink}>Dismiss</button>}
-          />
-          <div className="flex flex-col gap-2 text-[13px] leading-[1.6]">
-            <p className="tabular-nums text-(--text)">On disk: <span className="text-(--muted)">{diskSummary}</span></p>
-            <p className="tabular-nums text-(--text)">Here: <span className="text-(--muted)">{project.name} · {project.environment} · {hereSummary}</span></p>
-            {diskDiffers
-              ? <p className="text-[12px] text-(--muted)">Agents opening this folder resolve the on-disk file until re-saved. Keep the disk version, or overwrite it with what is shown here.</p>
-              : <p className="text-[12px] text-(--muted)">Agents opening this folder resolve exactly what is shown here.</p>}
+      {diskCheck && diskDiffers && (
+        <Card className="shrink-0 !py-3" >
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="nx-tile" data-tone="danger"><NxIcon name="alert" size={17} /></span>
+            <div className="min-w-[260px] flex-1">
+              <div className="text-[13.5px] font-semibold text-(--text)">Folder differs from the project file. Choose which wins.</div>
+              <p className="truncate text-[12px] text-(--muted)" title={diskSummary}>On disk: <span className="nx-mono">{diskSummary}</span></p>
+              <p className="truncate text-[12px] text-(--muted)" title={`${project.name} · ${project.environment} · ${hereSummary}`}>Here: <span className="nx-mono">{project.name} · {project.environment} · {hereSummary}</span></p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onPress={() => setDiskCheck(null)}>Keep disk</Button>
+              <Button size="sm" isDisabled={overwriting || project.connections.length === 0} onPress={() => void overwriteDisk()}>{overwriting ? "Overwriting…" : "Overwrite disk"}</Button>
+            </div>
           </div>
-          {diskDiffers && (
-            <div className="mt-4 flex flex-wrap gap-2 border-t border-(--line) pt-4">
-              <button type="button" onClick={() => setDiskCheck(null)} className={secondaryBtn}>Keep disk</button>
-              <button type="button" onClick={() => void overwriteDisk()} disabled={overwriting || project.connections.length === 0} className={primaryBtn}>
-                {overwriting ? "Overwriting…" : "Overwrite disk"}
-              </button>
-            </div>
-          )}
         </Card>
       )}
 
-      {!setupDone && (
-        <Card className="flex min-h-[280px] shrink-0 flex-col overflow-visible">
-          <CardHeading eyebrow="Setup" title={`${steps.filter((s) => s.done).length} of 3`} />
-          <ol className="flex flex-col gap-1">
-            {steps.map((step, i) => (
-              <li key={step.label} className="flex items-center gap-3 border-t border-(--line) py-3 first:border-t-0 first:pt-0">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--raised) text-[11px] font-semibold tabular-nums text-(--muted)">{i + 1}</span>
-                <span className="rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.05em]" style={badgeStyle(step.done ? "green" : "pending")}>
-                  {step.done ? "Done" : "Next"}
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,4fr)]" style={{ minHeight: 280 }}>
+        <Card flush className="flex min-h-0 flex-col">
+          <div className="shrink-0 px-5 pt-4">
+            <CardHeading eyebrow={setupDone ? "Agents" : "Setup"} title={setupDone ? (agentsSeen.length === 0 ? "None seen yet" : `${agentsSeen.length} seen on this project`) : `${stepsDone} of 3`} />
+            {!setupDone && <div className="-mt-1 mb-2 h-1 rounded-full bg-(--raised)"><div className="h-1 rounded-full bg-(--green)" style={{ width: `${(stepsDone / 3) * 100}%` }} /></div>}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {!setupDone ? steps.map((step, i) => (
+              <div key={step.label} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                <span className="nx-check" data-state={step.done ? "done" : "pending"}>{step.done && <NxIcon name="check" size={13} />}</span>
+                <span className="nx-row-body">
+                  <span className="nx-row-title">{step.label}</span>
+                  <span className="nx-row-sub" title={step.detail}>{step.detail}</span>
                 </span>
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-(--text)">
-                  {step.label}
-                  <small className="block truncate text-[12px] font-normal tabular-nums text-(--muted)">{step.detail}</small>
-                </span>
-                {i === 1 && !step.done && <button type="button" onClick={onAddConnection} className={smallBtn}>Connect</button>}
-                {i === 2 && !step.done && <button type="button" onClick={() => void verifyOnDisk()} disabled={verifying} className={smallBtn}>{verifying ? "Checking…" : "Verify"}</button>}
-              </li>
+                {i === 1 && !step.done && <Button size="sm" variant="outline" onPress={onAddConnection}>Connect</Button>}
+                {i === 2 && !step.done && <Button size="sm" variant="outline" isDisabled={verifying} onPress={() => void verifyOnDisk()}>{verifying ? "Checking…" : "Verify"}</Button>}
+              </div>
+            )) : agentsSeen.length === 0 ? (
+              <Empty title="No agent has called yet" action={<Button size="sm" onPress={onConnectAgent}>Connect agent</Button>}>Connect one and its calls show up here.</Empty>
+            ) : agentsSeen.map((agent) => (
+              <div key={agent.name} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                <span className="nx-tile" data-tone="success"><NxIcon name="agents" size={16} /></span>
+                <span className="nx-row-body"><span className="nx-row-title">{agentDisplayName(agent.name)}</span><span className="nx-row-sub">{agent.calls} call{agent.calls === 1 ? "" : "s"}</span></span>
+                <span className="nx-mono nx-muted">{timeAgo(agent.last)}</span>
+              </div>
             ))}
-          </ol>
+          </div>
         </Card>
-      )}
 
-      <div className="grid shrink-0 gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeading
-            eyebrow="Guard"
-            title={mine.length === 0 ? "No calls yet" : `${allowed} allowed · ${blocked} blocked`}
-            action={GUARD_VISIBLE ? <button type="button" onClick={() => onView("guard")} className={ghostLink}>Open guard →</button> : undefined}
-          />
-          {lastBlock ? (
-            <div className="flex flex-col gap-2"><AuditRow entry={lastBlock} /></div>
-          ) : (
-            <p className="text-[13px] leading-[1.6] text-(--muted)">
-              {mine.length === 0 ? "Nothing mediated yet. Route an agent through Nexus and the verdicts land here." : "No blocks — every mediated call was allowed."}
-            </p>
-          )}
-          {live && (
-            <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-(--line) pt-4">
-              <button type="button" onClick={() => void runGuardedRead()} disabled={liveChecking} className={smallBtn}>
-                {liveChecking ? "Asking Supabase…" : liveCheck ? "Re-check approval live" : "Check approval live"}
-              </button>
-              {liveCheck && <small className="text-[12px] tabular-nums" style={{ color: liveCheck.ok ? "var(--green)" : "var(--red)" }}>{liveCheck.ok ? "✓ " : ""}{liveCheck.text}</small>}
-            </div>
-          )}
+        <Card flush className="flex min-h-0 flex-col">
+          <div className="shrink-0 px-5 pt-4">
+            <CardHeading
+              eyebrow="Bindings"
+              title={project.connections.length === 0 ? "None yet" : `${connected.length}/${project.connections.length} connected`}
+              action={<span className="flex gap-1.5">{live && <Button size="sm" variant="ghost" isDisabled={liveChecking} onPress={() => void runGuardedRead()}>{liveChecking ? "Testing…" : "Test connection"}</Button>}<Button size="sm" variant="outline" onPress={() => onView("bindings")}>Manage</Button></span>}
+            />
+            {liveCheck && <p className="-mt-2 mb-2 text-[12px]" style={{ color: liveCheck.ok ? "var(--green)" : "var(--red)" }}>{liveCheck.ok ? "Connected · " : ""}{liveCheck.text}</p>}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {project.connections.length === 0 ? (
+              <Empty title="Nothing bound yet" action={<Button size="sm" onPress={onAddConnection}>Connect a service</Button>}>Approve in your browser, pick the account and resource, and the rest fills in.</Empty>
+            ) : project.connections.map((connection) => {
+              const tier = tierForProvider(connection.provider);
+              const ok = connection.authState === "connected";
+              return (
+                <div key={connection.id} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
+                  <span className="nx-tile text-[11px] font-semibold" aria-hidden="true">{connection.short}</span>
+                  <span className="nx-row-body">
+                    <span className="nx-row-title">{connection.provider}</span>
+                    <span className="nx-row-sub nx-mono" title={connection.resource ?? connection.target}>{connection.resource ?? connection.target}</span>
+                  </span>
+                  {isShared(connection) && <Badge tone="warning">Shared</Badge>}
+                  <Badge tone={ok ? "success" : connection.authState === "pending" ? "warning" : tierTone(tier)} dot={ok}>{ok ? "Connected" : connection.authState === "pending" ? "Pending" : tier}</Badge>
+                </div>
+              );
+            })}
+          </div>
         </Card>
-        <Card>
-          <CardHeading
-            eyebrow="Recent decisions"
-            title={mine.length === 0 ? "Quiet" : `${mine.length} total`}
-            action={<button type="button" onClick={() => onView("activity")} className={ghostLink}>View all →</button>}
-          />
-          {mine.length === 0 ? (
-            <p className="text-[13px] leading-[1.6] text-(--muted)">Allowed, blocked, denied — each mediated call shows here with its reason.</p>
-          ) : (
-            <div className="flex max-h-[240px] flex-col gap-2 overflow-y-auto">{[...mine].slice(-4).reverse().map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} />)}</div>
-          )}
+
+        <Card flush className="flex min-h-0 flex-col">
+          <div className="shrink-0 px-5 pt-4">
+            <CardHeading eyebrow="Activity" title={mine.length === 0 ? "No calls yet" : `${allowed} allowed · ${blocked} blocked`} action={<Button size="sm" variant="ghost" onPress={() => onView("activity")}>View all</Button>} />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {mine.length === 0 ? (
+              <Empty title="Quiet">Allowed and blocked calls appear here, each with its reason.</Empty>
+            ) : [...mine].slice(-8).reverse().map((entry, index) => <AuditRow key={`${entry.ts}-${index}`} entry={entry} inset />)}
+          </div>
         </Card>
       </div>
-
-      <Card flush className="flex shrink-0 flex-col">
-        <div className="px-5 pt-4"><CardHeading
-          eyebrow="Bindings"
-          title={project.connections.length === 0 ? "None yet — Supabase first" : `${connected.length}/${project.connections.length} connected`}
-          action={<Button size="sm" variant="ghost" onPress={() => onView("bindings")}>Manage</Button>}
-        /></div>
-        {project.connections.length === 0 ? (
-          <p className="px-5 pb-5 text-[13px] leading-[1.6] text-(--muted)">
-            No resources yet.{" "}
-            <button type="button" onClick={onAddConnection} className="font-medium text-(--text) underline underline-offset-2 hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-(--focus)">
-              Connect a service in your browser
-            </button>{" "}
-            — pick the account and resource, the rest fills in.
-          </p>
-        ) : (
-          <div className="flex min-h-0 flex-col">{project.connections.map((connection) => <ConnectionRow key={connection.id} connection={connection} accounts={accounts} />)}</div>
-        )}
-      </Card>
     </div>
   );
 }

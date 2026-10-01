@@ -743,7 +743,7 @@ function App() {
         railFooter={railFooter}
         crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
-        fill={view === "home"}
+        fill={view === "home" || view === "overview"}
         actions={
           <>
             <ThemeButton />
