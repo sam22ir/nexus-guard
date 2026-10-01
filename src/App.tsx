@@ -736,7 +736,7 @@ function App() {
         railFooter={railFooter}
         crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
-        fill={view === "home" || view === "overview" || view === "bindings"}
+        fill={view === "home" || view === "overview" || view === "bindings" || view === "services"}
         actions={
           <>
             <ThemeButton />
@@ -763,7 +763,7 @@ function App() {
       {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
       {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
       {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onSelectProject={setSelectedProject} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => setView("services")} />}
-      {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} />}
+      {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => setView("bindings")} />}
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
       {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {

@@ -3,8 +3,8 @@ import { tierForProvider, PROVIDER_CATALOG } from "../store";
 import { primaryBtn, secondaryBtn, inputClass, selectClass, badgeStyle } from "../app/styles";
 import { Modal } from "../app/common";
 
-export function AddAccountModal({ onClose, onSave }: { onClose: () => void; onSave: (input: { provider: string; label: string }) => void }) {
-  const [provider, setProvider] = useState("Supabase");
+export function AddAccountModal({ initialProvider, onClose, onSave }: { initialProvider?: string; onClose: () => void; onSave: (input: { provider: string; label: string }) => void }) {
+  const [provider, setProvider] = useState(initialProvider ?? "Supabase");
   const [customProvider, setCustomProvider] = useState("");
   const [label, setLabel] = useState("personal");
   const catalogProviders = [...PROVIDER_CATALOG.map((p) => p.provider), "Other…"];
