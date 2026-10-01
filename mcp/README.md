@@ -30,10 +30,10 @@ allow. Unknown providers read as `self-added` (not curated); enforcement is iden
 
 Only Supabase + GitHub are native in this scaffold. Read-only allowlists only; writes blocked by deterministic policy. Supabase URL uses `project_ref` + `read_only=true`.
 
-Session (§6): workspace-bound opaque tokens minted via `POST /session`, ~30min sliding TTL (each validated request extends expiry). Send `X-Nexus-Session` + `X-Nexus-Workspace` on `/mcp` + `/context`; missing/expired → `401`, cross-workspace use → `403`; revoke via `DELETE /session`. Every request re-validates via fresh `readContext(pinnedWorkspace)`. Revocation by pass-through, not tool-list push. Tool args can never switch workspace (`workspace_path`, `project_ref`, `project_id`, `connection_id` rejected).
+Session (§6): the server creates one MCP session per agent connection at `initialize` and re-validates context on every request. Registering needs only the workspace (`?workspace=` or `X-Nexus-Workspace`); the vault lock (`423`) and the workspace pin gate access. Optional workspace-bound opaque tokens can still be minted via `POST /session` (~30min sliding TTL): when sent as `X-Nexus-Session`, a missing or expired token → `401` and cross-workspace use → `403`. The standalone server does not require them (`ENTRY_OPTIONS.requireSession` is `false`); `createNexusHttpServer({ requireSession: true })` enforces them for tests and stricter embeds.
 
 ```bash
-# Mint (workspace-bound) → use → revoke. Port follows NEXUS_HTTP_PORT (default 3939).
+# Optional: mint (workspace-bound) → use → revoke. Port follows NEXUS_HTTP_PORT (default 3939).
 curl -s -X POST 127.0.0.1:3939/session -H 'content-type: application/json' \
   -d '{"workspace":"/tmp/nexus-e2e/a"}'
 # → {"ok":true,"token":"<opaque>","expiresAt":<ms>,"workspace":"/tmp/nexus-e2e/a"}

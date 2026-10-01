@@ -84,10 +84,21 @@ export function FirstRun({ projects, accounts, onRegister, onAddAccount, onOpenA
     } catch { /* keep the typed path */ }
   }
 
-  function register() {
+  async function register() {
     if (registeredId) { setStep(1); return; }
     if (!canRegister) return;
-    const id = onRegister({ name: name.trim(), path: path.trim(), repo: "", branch: "main" });
+    // Declare the folder's real git identity. A hard-coded branch that differs
+    // from the checked-out one makes Nexus fail closed ("the Git branch changed").
+    let repo = "";
+    let branch = "main";
+    if (desktop) {
+      try {
+        const found = await invoke<FolderInspection>("inspect_project_folder", { workspacePath: path.trim() });
+        if (found.git_remote) repo = found.git_remote;
+        if (found.git_branch) branch = found.git_branch;
+      } catch { /* a folder with no git keeps the defaults */ }
+    }
+    const id = onRegister({ name: name.trim(), path: path.trim(), repo, branch });
     if (!id) { setError("A project with that name already exists."); return; }
     setRegisteredId(id);
     setError("");
@@ -244,7 +255,7 @@ export function FirstRun({ projects, accounts, onRegister, onAddAccount, onOpenA
 
           <div className="mt-4 flex shrink-0 items-center justify-between gap-2 border-t border-(--line-soft) pt-3">
             <Button size="sm" variant="ghost" isDisabled={step === 0} onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>
-            {step === 0 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={register}>{registeredId ? "Continue" : "Register project"}</Button>}
+            {step === 0 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
             {step === 1 && <Button size="sm" onPress={() => setStep(2)}>{project && project.connections.length > 0 ? "Continue" : "Skip this step"}</Button>}
             {step === 2 && <Button size="sm" onPress={() => setStep(3)}>{agentId ? "Continue" : "Skip this step"}</Button>}
             {step === 3 && <Button size="sm" onPress={onFinish}>{routed ? "Open Home" : "Finish without testing"}</Button>}

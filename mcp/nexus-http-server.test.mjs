@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { createNexusHttpServer } from "./nexus-http-server.mjs";
+import { createNexusHttpServer, ENTRY_OPTIONS } from "./nexus-http-server.mjs";
 
 async function boot(t) {
   const server = createNexusHttpServer();
@@ -117,4 +117,23 @@ test("Phase 2 HTTP defaults: localhost + NEXUS_HTTP_PORT 3939 unified", async ()
   const { DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST } = await import("./nexus-http-server.mjs");
   assert.equal(DEFAULT_HTTP_HOST, process.env.NEXUS_HTTP_HOST ?? "localhost");
   assert.equal(DEFAULT_HTTP_PORT, Number(process.env.NEXUS_HTTP_PORT ?? 3939));
+});
+
+test("standalone defaults accept an agent that sends only its workspace", async (t) => {
+  assert.equal(ENTRY_OPTIONS.requireSession, false);
+  assert.equal(ENTRY_OPTIONS.enforceVaultLock, true);
+  const server = createNexusHttpServer({ ...ENTRY_OPTIONS, enforceVaultLock: false });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const { port } = server.address();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-entry-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const res = await fetch(`http://127.0.0.1:${port}/mcp?workspace=${encodeURIComponent(dir)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }),
+  });
+  assert.equal(res.status, 200);
+  const context = await fetch(`http://127.0.0.1:${port}/context?workspace=${encodeURIComponent(dir)}`);
+  assert.notEqual(context.status, 401);
 });

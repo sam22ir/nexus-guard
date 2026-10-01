@@ -33,6 +33,14 @@ const MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_HTTP_PORT = Number(process.env.NEXUS_HTTP_PORT ?? 3939);
 export const DEFAULT_HTTP_HOST = process.env.NEXUS_HTTP_HOST ?? "localhost";
 
+/** Options the standalone server starts with. Sessions are not required: an
+ *  agent registers with only its workspace (that is all the app's commands
+ *  and written configs carry), and access is gated by the vault lock, the
+ *  workspace pin, and the MCP session the server creates at initialize.
+ *  `POST /session` stays available but is optional, since any local caller
+ *  could mint a token anyway. */
+export const ENTRY_OPTIONS = Object.freeze({ enforceVaultLock: true, requireSession: false });
+
 /** Resolve the workspace for one request. Returns null when none is supplied
  *  and no explicit default was configured — the caller must then refuse. */
 export function resolveWorkspace(req, url, defaultWorkspace = null) {
@@ -412,7 +420,7 @@ export function startNexusHttpServer({ port = DEFAULT_HTTP_PORT, host = DEFAULT_
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const port = Number(process.env.NEXUS_HTTP_PORT ?? 3939);
   const host = process.env.NEXUS_HTTP_HOST ?? "localhost";
-  const { server, port: bound } = await startNexusHttpServer({ port, host, enforceVaultLock: true, requireSession: true });
+  const { server, port: bound } = await startNexusHttpServer({ port, host, ...ENTRY_OPTIONS });
   console.log(`nexus-http listening on http://${host}:${bound}/mcp`);
   const shutdown = () => server.close(() => process.exit(0));
   process.on("SIGINT", shutdown);
