@@ -381,45 +381,10 @@ details[open] > summary::after { transform: rotate(45deg); }
 @keyframes flipout { from { transform: none; opacity: 1; } to { transform: rotateX(95deg); opacity: 0; } }
 .hero h1 .word { white-space: nowrap; }
 
-/* ==========================================================================
-   Problem section, rebuilt: centered statement, one two-pane scene, 3 points.
-   ========================================================================== */
+/* Problem section: header kept, body is a picture of the mistake */
 .problem .prob-head { text-align: center; max-width: 720px; margin: 0 auto 44px; }
 .problem .prob-head h2 { font-size: clamp(34px, 5vw, 56px); margin: 12px 0 16px; letter-spacing: -0.035em; }
 .problem .prob-head p { color: var(--muted); font-size: 17px; }
-
-.scene { padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); position: relative; overflow: hidden; }
-.pane { display: flex; flex-direction: column; min-width: 0; }
-.pane + .vs + .pane { border-left: 1px solid var(--line); }
-.pane-bar { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
-.pane-bad .pane-bar { background: var(--red-bg); }
-.pane-ok .pane-bar { background: var(--green-bg); }
-.pane-bad .pane-bar .label { color: var(--red); }
-.pane-ok .pane-bar .label { color: var(--green); }
-.pane-body { padding: 22px 20px 26px; font: 13.5px/1.9 var(--font-mono); display: grid; align-content: start; gap: 2px; }
-.ln { white-space: pre-wrap; overflow-wrap: anywhere; }
-.ln-cmd { color: var(--text); }
-.ln-dim { color: var(--faint); }
-.ln-bad { color: var(--red); }
-.ln-ok { color: var(--green); }
-.vs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--line); font: 600 11px var(--font-sans); color: var(--muted); letter-spacing: 0.05em; z-index: 2; }
-/* lines type in one after another once the scene scrolls into view */
-.scene.in .ln { animation: lnin 0.45s var(--ease) calc(var(--n) * 340ms + 300ms) backwards; }
-@keyframes lnin { from { opacity: 0; transform: translateX(-8px); } }
-
-.prob-points { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; margin-top: 44px; }
-.prob-points > div { border-top: 1px solid var(--line); padding-top: 18px; }
-.prob-points .num { font: 12px var(--font-mono); color: var(--faint); display: block; margin-bottom: 10px; }
-.prob-points h3 { font-size: 17px; margin-bottom: 6px; }
-.prob-points p { color: var(--muted); font-size: 15px; }
-
-@media (max-width: 820px) {
-  .scene { grid-template-columns: minmax(0, 1fr); }
-  .pane + .vs + .pane { border-left: 0; border-top: 1px solid var(--line); }
-  .vs { top: auto; bottom: auto; position: static; transform: none; margin: -17px auto; }
-  .prob-points { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-}
-
 /* ==========================================================================
    See it work, rebuilt: situations on the left, the request's path on the right.
    ========================================================================== */
@@ -709,3 +674,150 @@ details[open] > summary::after { transform: rotate(45deg); }
 .plan-card.rec .btn-primary:hover { background: var(--action-text); opacity: 0.9; }
 .rec-badge { top: 26px; right: 24px; left: auto; background: var(--green-bg); color: var(--green); letter-spacing: 0.05em; }
 @media (max-width: 860px) { .plan-card.rec { transform: none; } }
+
+/* ==========================================================================
+   How it works: a replay of the app's real first-run setup.
+   ========================================================================== */
+.ob { padding: 0; overflow: hidden; }
+.ob-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.ob-logo { width: 24px; height: 24px; padding: 3px; border-radius: 8px; background: #1a1a1a; }
+.ob-example { margin-left: auto; }
+.ob-body { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+.ob-left { padding: 22px; display: flex; flex-direction: column; min-width: 0; }
+.ob-right { padding: 22px; display: flex; flex-direction: column; min-width: 0; border-left: 1px solid var(--line); background: var(--bg); }
+
+.ob-steps { list-style: none; display: grid; margin-bottom: 14px; }
+.ob-step { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 0; background: transparent; border: 0; text-align: left; color: var(--muted); font-size: 13.5px; }
+.ob-step.now { color: var(--text); font-weight: 600; }
+.ob-step-name { flex: 1; }
+.ob-sum { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); font-weight: 400; }
+.nx-check { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--line); font-size: 10.5px; font-weight: 600; color: var(--muted); transition: background 0.3s, border-color 0.3s, color 0.3s; }
+.nx-check.now { border-color: var(--text); color: var(--text); }
+.nx-check.done { background: var(--green-bg); border-color: transparent; color: var(--green); }
+.nx-check.sm { width: 18px; height: 18px; margin-top: 2px; }
+
+.ob-content { border-top: 1px solid var(--line); padding-top: 16px; flex: 1; display: grid; gap: 12px; align-content: start; animation: fadeup 0.4s var(--ease); min-height: 330px; }
+.ob-content h3 { font-size: 17px; }
+.ob-content > p { color: var(--muted); font-size: 13px; line-height: 1.55; margin: -4px 0 2px; }
+.ob-field { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.ob-field.tight { flex: 1; min-width: 100px; }
+.ob-input { padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13.5px; min-height: 38px; transition: opacity 0.4s, border-color 0.3s; }
+.ob-input.empty { opacity: 0.25; }
+.ob-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.ob-btn { display: inline-flex; align-items: center; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; font-weight: 500; background: transparent; transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.3s var(--ease); }
+.ob-btn.pressed { background: var(--action-bg); color: var(--action-text); border-color: var(--action-bg); transform: scale(0.97); }
+.ob-help { flex: 1; min-width: 160px; font-size: 12px; color: var(--muted); }
+.ob-box { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
+.ob-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.ob-bound { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ob-bound svg { color: var(--green); }
+.ob-bound code { color: var(--muted); font-size: 12.5px; }
+.ob-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ob-chip { padding: 8px 16px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 13px; font-weight: 500; transition: background 0.3s, color 0.3s; }
+.ob-chip.on { background: var(--text); color: var(--bg); }
+.ob-checks { list-style: none; border: 1px solid var(--line); border-radius: 12px; }
+.ob-checks li { display: flex; gap: 10px; padding: 9px 12px; }
+.ob-checks li + li { border-top: 1px solid var(--line-soft); }
+.ob-checks b { display: block; font-size: 13px; font-weight: 600; }
+.ob-checks small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ob-note { border-radius: 12px; padding: 10px 14px; font-size: 13px; line-height: 1.55; background: var(--raised); color: var(--muted); }
+.ob-note.ok { background: var(--green-bg); color: var(--green); }
+.ob-note code { font-size: 12.5px; }
+.ob-pop { animation: pop 0.45s var(--ease) backwards; }
+
+.ob-nav { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--line-soft); padding-top: 14px; margin-top: 16px; }
+.ob-link { background: transparent; border: 0; color: var(--muted); font-size: 14px; padding: 6px 4px; }
+.ob-link:disabled { opacity: 0.35; cursor: default; }
+.ob-next { padding: 8px 20px; }
+
+.ob-graph { flex: 1; display: grid; align-content: center; gap: 28px; padding: 22px 0; min-height: 240px; }
+.ob-empty { text-align: center; color: var(--muted); font-size: 13.5px; }
+.ob-row-graph { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; }
+.ob-node { display: inline-flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); min-width: 0; }
+.ob-node b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.ob-node small { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.ob-tile { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; transition: background 0.4s; }
+.ob-refused { justify-self: center; border-style: dashed; border-color: var(--red); }
+.ob-refused small { color: var(--red); }
+.ob-conn { flex: none; margin: 0 2px; }
+.ob-flow { animation: flow 1.2s linear infinite; }
+.ob-foot { font-size: 12px; color: var(--faint); margin-top: auto; }
+
+@media (max-width: 900px) {
+  .ob-body { grid-template-columns: minmax(0, 1fr); }
+  .ob-right { border-left: 0; border-top: 1px solid var(--line); }
+  .ob-content { min-height: 0; }
+  .ob-graph { min-height: 0; }
+  .ob-row-graph { flex-direction: column; gap: 8px; }
+  .ob-conn { transform: rotate(90deg); margin: 8px 0; }
+}
+
+/* Tighter, and a fixed height so the page does not jump between steps */
+.ob-left, .ob-right { padding: 18px 20px; }
+.ob-steps { margin-bottom: 10px; }
+.ob-step { padding: 5px 0; }
+.ob-content { gap: 9px; padding-top: 12px; min-height: 0; }
+.ob-content > p { font-size: 12.5px; }
+.ob-checks li { padding: 6px 12px; gap: 8px; }
+.ob-checks small { font-size: 11.5px; }
+.ob-note { padding: 8px 12px; font-size: 12.5px; line-height: 1.5; }
+.ob-nav { margin-top: 12px; padding-top: 10px; }
+.ob-graph { min-height: 0; padding: 14px 0; }
+@media (min-width: 901px) { .ob-body { min-height: 695px; } }
+
+/* The controls inside the demo are pictures of the app, not buttons. They get
+   their own look: square-ish, muted, "done" tint when pressed, no pointer. */
+.ob-btn, .ob-chip, .ob-input { pointer-events: none; user-select: none; cursor: default; }
+.ob-btn { border-radius: 10px; background: var(--raised); border: 1px solid var(--line); color: var(--muted); font-weight: 500; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+.ob-btn.pressed { background: var(--green-bg); color: var(--green); border-color: transparent; transform: none; }
+.ob-btn.pressed::before { content: "✓"; margin-right: 6px; font-weight: 700; }
+.ob-chip { border-radius: 10px; background: var(--raised); color: var(--muted); }
+.ob-chip.on { background: var(--blue-bg); color: var(--blue); }
+
+/* Typing */
+.untyped { visibility: hidden; }
+.caret { display: inline-block; width: 1.5px; height: 1.05em; margin-left: 1px; vertical-align: -0.14em; background: currentColor; animation: blink 0.8s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.ob-input { min-height: 38px; }
+.ob-checks small { display: block; min-height: 1.4em; }
+
+/* Topology: fits its container, readable text, bigger tags, node focus */
+.topo svg { min-width: 440px; }
+@media (min-width: 900px) { .topo svg { min-width: 440px; } }
+.t-name { font-size: 12.5px; }
+.t-sub { font-size: 10.5px; }
+.t-tag { font-size: 9px; }
+.t-node { cursor: pointer; }
+.t-node:focus-visible .t-card { stroke: var(--blue); }
+.t-node:hover .t-card { stroke: var(--muted); }
+.feed-line { overflow-wrap: anywhere; }
+
+.pstage { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); padding: 0; overflow: hidden; }
+.pstage-diagram { padding: 28px; display: grid; place-items: center; border-right: 1px solid var(--line); background: var(--bg); }
+.pd { width: 100%; max-width: 520px; height: auto; display: block; }
+.pstage-side { padding: 28px; display: flex; flex-direction: column; gap: 22px; justify-content: center; min-width: 0; }
+.pnotes { list-style: none; display: grid; gap: 16px; animation: fadeup 0.4s var(--ease); }
+.pnotes li { display: flex; gap: 14px; align-items: flex-start; animation: fadeup 0.45s var(--ease) calc(var(--n) * 90ms) backwards; }
+.pnotes b { display: block; font-size: 16px; font-weight: 600; }
+.pnotes small { display: block; color: var(--muted); font-size: 14.5px; line-height: 1.5; margin-top: 2px; }
+.pmark { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; margin-top: 1px; }
+.pnotes.today .pmark { background: var(--red-bg); color: var(--red); }
+.pnotes.nexus .pmark { background: var(--green-bg); color: var(--green); }
+.pverdict { border-radius: 14px; padding: 14px 16px; font-size: 15px; font-weight: 600; animation: fadeup 0.4s var(--ease); }
+.pverdict.today { background: var(--red-bg); color: var(--red); }
+.pverdict.nexus { background: var(--green-bg); color: var(--green); }
+.pstage .seg { align-self: flex-start; }
+@media (max-width: 860px) {
+  .pstage { grid-template-columns: minmax(0, 1fr); }
+  .pstage-diagram { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px; }
+  .pstage-side { padding: 22px; }
+}
+
+/* Nexus mark in the problem diagram follows the theme, like the nav logo */
+.pd-logo-l { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .pd-logo-d { display: none; }
+  :root:not([data-theme="dark"]) .pd-logo-l { display: inline; }
+}
+:root[data-theme="light"] .pd-logo-d { display: none; }
+:root[data-theme="light"] .pd-logo-l { display: inline; }
