@@ -6,7 +6,8 @@ import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifes
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
-import { OnboardingModal, ThemeButton, initTheme } from "./onboarding";
+import { ThemeButton, initTheme } from "./onboarding";
+import { FirstRun } from "./views/FirstRun";
 import { Button } from "@heroui/react";
 import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
 import { type View, type ErrorRetry, type ErrorRecord } from "./app/types";
@@ -155,15 +156,8 @@ function App() {
     setOnboardingOpen(false);
   }
 
-  function finishOnboarding(input: { name: string; path: string; repo: string; branch: string; environment?: string; binding?: { provider: string; accountId: string; resource: string } }) {
-    if (!projects.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) {
-      addProject(input);
-    }
-    dismissOnboarding();
-  }
-
-  function addProject(input: { name: string; path: string; repo: string; branch: string; environment?: string; binding?: { provider: string; accountId: string; resource: string } }) {
-    if (projects.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) return;
+  function addProject(input: { name: string; path: string; repo: string; branch: string; environment?: string; binding?: { provider: string; accountId: string; resource: string } }, options?: { stay?: boolean }): string | null {
+    if (projects.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) return null;
     const branch = input.branch || "main";
     const environment = input.environment || (branch === "main" ? "production" : "development");
     const accountEntry = input.binding ? accounts.find((a) => a.id === input.binding!.accountId) : undefined;
@@ -195,8 +189,7 @@ function App() {
     };
     setProjects((current) => [...current, newProject]);
     setSelectedProject(newProject.id);
-    setView("overview");
-    setModal(null);
+    if (!options?.stay) { setView("overview"); setModal(null); }
     // Manifest sync (paper: discovery != registration — local create is not
     // on-disk until the project file is written). Runs async; the local
     // create above is already done so the UI never blocks on the backend.
@@ -245,6 +238,7 @@ function App() {
         setNotice("Project saved here, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity.");
       }
     })();
+    return newProject.id;
   }
 
   function updateProject(projectId: string, patch: { name: string; path: string; repo: string; branch: string; environment: string }) {
@@ -783,7 +777,18 @@ function App() {
       }} />}
       </AppShell>
 
-      {onboardingOpen && <OnboardingModal onClose={dismissOnboarding} onSave={finishOnboarding} onAddAccount={addAccount} accounts={accounts} existingNames={projects.map((item) => item.name)} onWatchPulse={() => { dismissOnboarding(); setView("home"); }} />}
+      {onboardingOpen && (
+        <FirstRun
+          projects={projects}
+          accounts={accounts}
+          onRegister={(input) => addProject(input, { stay: true })}
+          onAddAccount={addAccount}
+          onOpenAddBinding={(projectId) => { setSelectedProject(projectId); setModal("connection"); }}
+          onOpenConnectAgent={openConnectAgent}
+          onSkip={dismissOnboarding}
+          onFinish={() => { dismissOnboarding(); setView("home"); }}
+        />
+      )}
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
