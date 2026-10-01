@@ -6,7 +6,7 @@ Nexus sits between AI coding agents and the services they use. It works out whic
 project an agent is in and sends each call to that project's own account and resource,
 so an agent working on one project can't reach another project's services. Made for one
 developer running several agents (Claude Code, Codex, OpenCode) across several projects.
-Status: early build, Linux first.
+Platform: Linux first.
 
 ## How it works
 
@@ -39,10 +39,10 @@ development are kept apart too.
 - It can't see or stop anything an agent does without going through Nexus.
 - Guard (reviewing risky actions) may come later. It is not built.
 
-## Pricing (proposal, not final)
+## Pricing
 
 Free: up to 2 projects. Pro: about $10–12 a month or $99 a year. Team/Agency: later.
-The core stays free.
+The core stays free. Prices may change at launch.
 
 ## Link
 
