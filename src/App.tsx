@@ -22,7 +22,6 @@ import { ActivityView } from "./views/ActivityView";
 import { SettingsView } from "./views/SettingsView";
 import { AddProjectModal } from "./modals/AddProjectModal";
 import { EditProjectModal } from "./modals/EditProjectModal";
-import { EditConnectionModal } from "./modals/EditConnectionModal";
 import { AddConnectionModal } from "./modals/AddConnectionModal";
 import { PublishableKeyModal } from "./modals/PublishableKeyModal";
 import { ConnectAgentModal } from "./modals/ConnectAgentModal";
@@ -35,13 +34,12 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(() => window.localStorage.getItem("nexus-guard.selected-project") ?? "koupa");
   const [linkDraft, setLinkDraft] = useState<{ projectId: string; provider: string; accountId?: string } | null>(null);
   const [linkPrefill, setLinkPrefill] = useState<{ provider: string; accountId?: string } | null>(null);
-  const [modal, setModal] = useState<"project" | "connection" | "key" | "edit-project" | "edit-connection" | "agent" | null>(null);
+  const [modal, setModal] = useState<"project" | "connection" | "key" | "edit-project" | "agent" | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return !window.localStorage.getItem("nexus-guard.onboarded"); } catch { return false; }
   });
   const [agentTarget, setAgentTarget] = useState<{ projectId: string; agentId: string | null } | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [editingConnection, setEditingConnection] = useState<{ projectId: string; connection: Connection } | null>(null);
   const [keyConnection, setKeyConnection] = useState<Connection | null>(null);
   const [vaultUnlocked, setVaultUnlocked] = useState(false);
   const [savedKeys, setSavedKeys] = useState<Record<string, boolean>>({});
@@ -140,11 +138,6 @@ function App() {
   function openEditProject(item: Project) {
     setEditingProject(item);
     setModal("edit-project");
-  }
-
-  function openEditConnection(projectId: string, connection: Connection) {
-    setEditingConnection({ projectId, connection });
-    setModal("edit-connection");
   }
 
   function openKeyModal(connection: Connection) {
@@ -743,7 +736,7 @@ function App() {
         railFooter={railFooter}
         crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
-        fill={view === "home" || view === "overview"}
+        fill={view === "home" || view === "overview" || view === "bindings"}
         actions={
           <>
             <ThemeButton />
@@ -769,7 +762,7 @@ function App() {
       {view === "overview" && <Overview project={project} projects={projects} accounts={accounts} onView={setView} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />}
       {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
       {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
-      {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onRemove={(connection) => void removeConnection(connection)} onEdit={(connection) => openEditConnection(project.id, connection)} onOpenServices={() => setView("services")} />}
+      {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onSelectProject={setSelectedProject} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => setView("services")} />}
       {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} />}
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
@@ -793,7 +786,6 @@ function App() {
       {onboardingOpen && <OnboardingModal onClose={dismissOnboarding} onSave={finishOnboarding} onAddAccount={addAccount} accounts={accounts} existingNames={projects.map((item) => item.name)} onWatchPulse={() => { dismissOnboarding(); setView("home"); }} />}
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
-      {modal === "edit-connection" && editingConnection && <EditConnectionModal connection={editingConnection.connection} accounts={accounts} onClose={() => setModal(null)} onOpenServices={() => { setModal(null); setView("services"); }} onSave={(patch) => updateConnection(editingConnection.projectId, editingConnection.connection.id, patch)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
       {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} accounts={accounts} onClose={() => { setModal(null); setLinkPrefill(null); }} onOpenServices={() => { setModal(null); setLinkPrefill(null); setView("services"); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
