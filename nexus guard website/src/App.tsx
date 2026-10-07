@@ -2173,6 +2173,7 @@ function Footer({ theme }: { theme: Theme }) {
               <a href="#pricing">Pricing</a>
               <a href="#faq">FAQ</a>
               <a href="#download">Download</a>
+              <a href="https://github.com/sam22ir/nexus-guard" rel="noopener">Source on GitHub</a>
               <a href="/llms.txt">llms.txt</a>
             </div>
           </div>

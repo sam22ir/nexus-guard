@@ -27,11 +27,19 @@ with no valid download the page stays on the waitlist.
 
 ## Where the installers live
 
-The GitHub repository is private, so its release files are not downloadable
-by visitors. Before going live, put the installers somewhere public, for
-example a public Cloudflare R2 bucket, or make the repository public. Then:
+The repository is public, so the files attached to a published GitHub release
+can be downloaded by anyone. Use their direct links:
 
-1. Build the installers (`.github/workflows/release.yml` makes a draft release).
-2. Upload them to the public location and check each link in a private window.
-3. Edit `public/release.json`, then `npm run deploy` from this folder.
-4. Email the waitlist (the `signups` table in the `nexus-waitlist` D1 database).
+```
+https://github.com/sam22ir/nexus-guard/releases/download/v0.1.0/<file name>
+```
+
+1. Push a tag such as `v0.1.0`. `.github/workflows/release.yml` builds the
+   installers for Linux, macOS (Apple Silicon and Intel) and Windows into a
+   **draft** release.
+2. Check the draft, then publish it. Draft files are not public, so links only
+   work after publishing.
+3. Copy each file's link into `public/release.json`, set `"status": "available"`,
+   and open every link in a private window.
+4. `npm run deploy` from this folder.
+5. Email the waitlist (the `signups` table in the `nexus-waitlist` D1 database).
