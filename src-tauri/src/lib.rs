@@ -2735,6 +2735,70 @@ fn cancel_mcp_oauth(state: tauri::State<'_, McpOAuthManager>) {
     }
 }
 
+// ---- Which bindings may make changes ("Allow safe writes") ----
+// Kept in the app's own config folder, never in the project folder, so an agent
+// cannot grant itself write access. The Nexus server reads the same file
+// (mcp/write-grants.mjs).
+
+fn write_grants_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_WRITE_GRANTS_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/write-grants.json")
+}
+
+fn grant_key(project_id: &str, connection_id: &str) -> Result<String, String> {
+    let ok = |v: &str| !v.is_empty() && v.len() <= 128 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !ok(project_id) || !ok(connection_id) {
+        return Err("That binding is not valid.".to_string());
+    }
+    Ok(format!("{project_id}:{connection_id}"))
+}
+
+fn read_grants(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("grants").and_then(|g| g.as_object().cloned()))
+        .unwrap_or_default()
+}
+
+fn set_grant_at(path: &std::path::Path, key: &str, allowed: bool) -> Result<(), String> {
+    let mut grants = read_grants(path);
+    if allowed {
+        grants.insert(key.to_string(), serde_json::Value::Bool(true));
+    } else {
+        grants.remove(key);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "grants": grants })).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this setting.".to_string())
+}
+
+#[tauri::command]
+fn get_write_grant(project_id: String, connection_id: String) -> Result<bool, String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    Ok(read_grants(&write_grants_path()).get(&key).and_then(|v| v.as_bool()) == Some(true))
+}
+
+#[tauri::command]
+fn set_write_grant(project_id: String, connection_id: String, allowed: bool) -> Result<(), String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    set_grant_at(&write_grants_path(), &key, allowed)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2794,7 +2858,9 @@ pub fn run() {
             list_github_repos,
             start_mcp_oauth,
             poll_mcp_oauth,
-            cancel_mcp_oauth
+            cancel_mcp_oauth,
+            get_write_grant,
+            set_write_grant
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");
@@ -2804,6 +2870,31 @@ pub fn run() {
 mod agent_setup_tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn write_grants_round_trip_and_stay_per_binding() {
+        let dir = std::env::temp_dir().join(format!("nexus-grants-test-{}", std::process::id()));
+        let path = dir.join("write-grants.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_grants(&path).is_empty(), "missing file means no grants");
+        set_grant_at(&path, "koupa:koupa-ln", true).unwrap();
+        set_grant_at(&path, "koupa:other", true).unwrap();
+        assert_eq!(read_grants(&path).get("koupa:koupa-ln").and_then(|v| v.as_bool()), Some(true));
+        set_grant_at(&path, "koupa:koupa-ln", false).unwrap();
+        assert!(read_grants(&path).get("koupa:koupa-ln").is_none());
+        assert_eq!(read_grants(&path).get("koupa:other").and_then(|v| v.as_bool()), Some(true), "turning one off leaves the others");
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_grants(&path).is_empty(), "a damaged file means no grants");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grant_keys_reject_anything_that_could_escape() {
+        assert_eq!(grant_key("koupa", "koupa-ln").unwrap(), "koupa:koupa-ln");
+        assert!(grant_key("koupa:x", "c").is_err());
+        assert!(grant_key("", "c").is_err());
+        assert!(grant_key("p", "../c").is_err());
+    }
 
     #[test]
     fn node_versions_parse_to_a_major() {

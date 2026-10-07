@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../vault";
-import { tierForProvider, type Account, type Connection, type Project } from "../store";
+import { tierForProvider, remoteServiceUrl, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey } from "../accounts";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
@@ -122,6 +122,32 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
   const [copied, setCopied] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  // "Allow safe writes" for services signed in with the generic flow. Saved in the app's own
+  // folder (not the project folder), so an agent cannot switch it on for itself.
+  const isRemote = !!remoteServiceUrl(connection.provider) && connection.method === "mcp";
+  const [writesOn, setWritesOn] = useState(false);
+  const [writesBusy, setWritesBusy] = useState(false);
+  const [writesError, setWritesError] = useState("");
+  useEffect(() => {
+    setWritesOn(false); setWritesError("");
+    if (!isRemote || !desktopAvailable()) return;
+    let cancelled = false;
+    invoke<boolean>("get_write_grant", { projectId: project.id, connectionId: connection.id }).then((on) => { if (!cancelled) setWritesOn(on); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [connection.id, project.id, isRemote]);
+  async function toggleWrites() {
+    const next = !writesOn;
+    if (next && !window.confirm(`Let agents make changes in ${connection.provider}?\n\nOnly actions ${connection.provider} labels as safe, non-destructive changes will run. Anything that deletes or may be destructive, and anything in production, is still refused.\n\nYou can switch this off at any time.`)) return;
+    setWritesBusy(true); setWritesError("");
+    try {
+      await invoke("set_write_grant", { projectId: project.id, connectionId: connection.id, allowed: next });
+      setWritesOn(next);
+    } catch {
+      setWritesError("Could not save this setting. Try again.");
+    } finally {
+      setWritesBusy(false);
+    }
+  }
   useEffect(() => { setAccountId(startAccount); setAccountTouched(false); setTarget(connection.target); setProjectRef(connection.projectRef ?? ""); setUrl(connection.url ?? ""); setTest(null); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.id]);
 
@@ -252,6 +278,20 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
                 <span className="nx-row-sub" style={test ? { color: test.ok ? "var(--green)" : "var(--red)", whiteSpace: "normal" } : undefined}>{test ? test.text : "Ask Supabase for this project through Nexus."}</span>
               </span>
               <Button size="sm" variant="outline" isDisabled={testing || !desktopAvailable()} onPress={() => void runTest()}>{testing ? "Testing…" : "Test"}</Button>
+            </div>
+          )}
+          {isRemote && connected && (
+            <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0 }}>
+              <span className="nx-tile"><NxIcon name="shield" size={16} /></span>
+              <span className="nx-row-body">
+                <span className="nx-row-title">Allow safe writes</span>
+                <span className="nx-row-sub" style={{ whiteSpace: "normal", ...(writesError ? { color: "var(--red)" } : {}) }}>
+                  {writesError || (writesOn
+                    ? `On. Agents can run changes ${connection.provider} labels as safe. Deleting or unlabelled actions and anything in production stay refused.`
+                    : `Off. Agents can read ${connection.provider} but cannot change anything.`)}
+                </span>
+              </span>
+              <Button size="sm" variant={writesOn ? "primary" : "outline"} isDisabled={writesBusy || !desktopAvailable()} onPress={() => void toggleWrites()} aria-pressed={writesOn}>{writesBusy ? "Saving…" : writesOn ? "Turn off" : "Turn on"}</Button>
             </div>
           )}
           <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0 }}>

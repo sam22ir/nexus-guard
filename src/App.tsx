@@ -292,6 +292,7 @@ function App() {
     if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from this desktop vault.`)) return;
     for (const connection of target.connections) {
       await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
+      await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
     }
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);
@@ -754,6 +755,7 @@ function App() {
     setNotice("");
     // Best-effort vault cleanup first; a missing entry is not an error.
     await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
+    await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
     await removePublishableKey(projectId, connection.id).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connection.id) } : item));
     setSavedKeys((current) => {

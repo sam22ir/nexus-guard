@@ -138,17 +138,41 @@ export function serviceMcpUrl(provider) {
 }
 
 /**
- * Read-only rule for a remote service's tools, taken from what the tool says
- * about itself (MCP tool annotations). Only a tool that declares itself
- * read-only, and does not also declare itself destructive, goes through.
- * Anything else, including a tool with no annotations, needs approval and is
- * never forwarded. Fail-closed.
+ * What a remote tool says about itself (MCP tool annotations):
+ *  - "read": declares itself read-only and not destructive.
+ *  - "write": changes data but explicitly declares itself not destructive.
+ *  - "destructive": anything else, including a tool with no annotations
+ *    (the MCP default for an unlabelled tool is destructive).
  */
-export function remoteToolDecision(tool) {
+export function remoteToolKind(tool) {
   const a = tool && typeof tool === "object" ? tool.annotations : null;
-  if (a && a.readOnlyHint === true && a.destructiveHint !== true) return { decision: "allow", reason: null };
+  if (!a || typeof a !== "object") return "destructive";
+  if (a.readOnlyHint === true) return a.destructiveHint === true ? "destructive" : "read";
+  return a.destructiveHint === false ? "write" : "destructive";
+}
+
+const isProduction = (environment) => String(environment ?? "").trim().toLowerCase().startsWith("prod");
+
+/**
+ * Decide one remote tool call. Reads go through. A safe write goes through only
+ * when the developer switched writes on for this binding, and never in
+ * production. Everything else needs approval and is never forwarded.
+ */
+export function remoteToolDecision(tool, { allowWrites = false, environment } = {}) {
+  const kind = remoteToolKind(tool);
+  if (kind === "read") return { decision: "allow", reason: null, kind };
+  if (kind === "write") {
+    if (isProduction(environment)) {
+      return { decision: "approval_required", reason: "Changes are never allowed through Nexus in production. It was not run.", kind };
+    }
+    if (!allowWrites) {
+      return { decision: "approval_required", reason: "This changes data and writes are off for this binding. Turn on 'Allow safe writes' in Nexus to let it run. It was not run.", kind };
+    }
+    return { decision: "allow", reason: "write allowed by this binding's setting", kind };
+  }
   return {
     decision: "approval_required",
-    reason: "This tool is not marked read-only by the service, so it needs developer approval and was not run.",
+    reason: "This tool may delete or change data in ways that cannot be undone, or does not say. It needs developer approval and was not run.",
+    kind,
   };
 }

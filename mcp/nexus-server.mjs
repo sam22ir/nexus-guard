@@ -15,7 +15,8 @@ import { classify, decideGuard, resolveOverride } from "./guard-policy.mjs";
 // guard-policy (decideGuard/resolveOverride) + costBearing/escapeHatch axes are
 // paid-tier only. MVP routing is read-allow/block via decideExecute below with
 // GUARD_ENABLED=false. Enforcement in guard-policy.mjs is kept, never deleted.
-import { curatedDecision, isReadTool, normalizeProvider, providerTier, serviceMcpUrl, remoteToolDecision } from "./providers.mjs";
+import { curatedDecision, isReadTool, normalizeProvider, providerTier, serviceMcpUrl, remoteToolDecision, remoteToolKind } from "./providers.mjs";
+import { readWriteGrant } from "./write-grants.mjs";
 
 // Phase 1 (Guard hide, MVP): Guard extras (overrides, cost axis, escape hatch)
 // are OFF unless GUARD_ENABLED=1/true. Routing enforcement (read-allow/block)
@@ -675,7 +676,7 @@ export function pickWorkspaceFromRoots(roots) {
 }
 
 /** Directly relays upstream tool definitions and calls, rather than reimplementing provider tools. */
-export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
+export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, getWriteGrant, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
   const server = new Server({ name: "nexus-guard", version: "0.3.0" }, { capabilities: { tools: { listChanged: false } } });
   const dependencies = { getToken, connectProvider, refreshToken };
   const githubDeps = {
@@ -686,6 +687,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
   const remoteDeps = {
     getToken: getRemoteToken ?? ((provider, projectId, connectionId) => readProviderToken(provider, projectId, connectionId)),
     connect: connectRemoteProvider ?? connectRemoteMcp,
+    writeGrant: getWriteGrant ?? ((projectId, connectionId) => readWriteGrant(projectId, connectionId)),
   };
   // `workspace: null` defers binding to the client's MCP roots (paper §7/§10):
   // used only when no explicit workspace was supplied. Once bound it never
@@ -901,20 +903,22 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
       const tools = Array.isArray(listed?.tools) ? listed.tools : [];
       if (operation === "list_tools") {
         await log("allow", null);
-        return jsonResult({ provider: providerName, tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", read_only: remoteToolDecision(t).decision === "allow" })) });
+        return jsonResult({ provider: providerName, tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", kind: remoteToolKind(t), read_only: remoteToolKind(t) === "read" })) });
       }
       const tool = tools.find((t) => t.name === operation);
       if (!tool) {
         await log("block", "tool not offered by provider");
         return blocked("This service does not offer that tool right now. Run list_tools to see what it offers.", { operation });
       }
-      const policy = remoteToolDecision(tool);
+      const kind = remoteToolKind(tool);
+      const allowWrites = kind === "write" ? await remoteDeps.writeGrant(context.project_id, connection.connection_id) === true : false;
+      const policy = remoteToolDecision(tool, { allowWrites, environment: connection.environment ?? context.environment });
       if (policy.decision !== "allow") {
         await log("approval_required", policy.reason);
-        return decisionResult("approval_required", { reason: policy.reason, operation }, true);
+        return decisionResult("approval_required", { reason: policy.reason, operation, kind: policy.kind }, true);
       }
       const result = await provider.callTool({ name: operation, arguments: args ?? {} }, undefined, { timeout: 20_000 });
-      await log("allow", null);
+      await log("allow", policy.reason);
       return result;
     } catch (error) {
       console.error(`Nexus remote service call failed: ${error instanceof Error ? error.name : "unknown error"}`);
