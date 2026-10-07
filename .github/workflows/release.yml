@@ -24,7 +24,10 @@ jobs:
             args: --target aarch64-apple-darwin
           - os: macos-latest
             args: --target x86_64-apple-darwin
+          # The .msi step (WiX light.exe) failed on the runner with no detail, so
+          # Windows ships the NSIS setup.exe, Tauri's default Windows installer.
           - os: windows-latest
+            args: --bundles nsis --verbose
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
