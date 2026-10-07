@@ -113,9 +113,10 @@ test("Phase 2 sessions: POST /session mint (workspace-bound), validate on /conte
   assert.equal((await after.json()).revoked, true);
 });
 
-test("Phase 2 HTTP defaults: localhost + NEXUS_HTTP_PORT 3939 unified", async () => {
+test("Phase 2 HTTP defaults: 127.0.0.1 + NEXUS_HTTP_PORT 3939 unified", async () => {
   const { DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST } = await import("./nexus-http-server.mjs");
-  assert.equal(DEFAULT_HTTP_HOST, process.env.NEXUS_HTTP_HOST ?? "localhost");
+  // The same address the app writes into agent configs; "localhost" may mean ::1.
+  assert.equal(DEFAULT_HTTP_HOST, process.env.NEXUS_HTTP_HOST ?? "127.0.0.1");
   assert.equal(DEFAULT_HTTP_PORT, Number(process.env.NEXUS_HTTP_PORT ?? 3939));
 });
 
