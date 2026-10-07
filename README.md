@@ -12,6 +12,33 @@ Agents reach one persistent local Nexus over HTTP-only
 workspace pinned per request. Anything an agent does outside Nexus is
 unmanaged, not protected — direct provider CLI/MCP/browser use bypasses Nexus.
 
+## Quick start
+
+You need **Node.js 20 or newer** and one coding agent (Claude Code, Codex or OpenCode). The desktop app runs a small local server with your Node, and shows a "Get Node.js" prompt if it is missing or too old.
+
+**Installer:** download the build for your system from the project's GitHub Releases (unsigned for now, so your OS may ask you to confirm opening it).
+
+**From source:** also install Rust (via [rustup](https://rustup.rs)) and the [Tauri desktop libraries](https://tauri.app/start/prerequisites/) for your OS, then:
+
+```sh
+npm install
+npm run tauri dev
+```
+
+The app starts the local Nexus server for you (`http://localhost:3939/mcp`; set `NEXUS_HTTP_PORT` to change the port) and stops it when you close the window. The wizard header shows whether it is running. Without the desktop app you can still run it yourself with `node mcp/nexus-http-server.mjs`.
+
+On first launch the setup wizard takes about two minutes:
+
+1. **Project:** pick the folder your agent works in.
+2. **Agent:** pick your agent and press Connect. Nexus adds one entry to that agent's project config, keeps your other servers and saves a backup first.
+3. **See it work:** restart the agent in that folder and ask it "Which Nexus project am I in?". The wizard shows the call when it arrives.
+
+Binding Supabase or GitHub to the project is optional and can be done at the end or later from the Project page (Bindings). Skipped setup resumes from Home ("Finish setup") or the Status checklist on the Project page.
+
+### How the installer is built
+
+`npm run tauri build` first runs `scripts/prepare-bundle.mjs`, which bundles the MCP server into one file (`src-tauri/resources/mcp/`) and builds the `nexus-keyring` helper as a Tauri sidecar (`src-tauri/binaries/`). Both are generated and git-ignored. The `Release installers` workflow does this on Linux, macOS (Apple silicon and Intel) and Windows and uploads a draft release.
+
 ## Current state
 
 The desktop interface (dark and light themes, following the system setting) is now scaffolded with:

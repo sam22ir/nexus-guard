@@ -796,6 +796,27 @@ struct SupabaseProjectSummary {
     name: String,
     region: Option<String>,
     organization_id: Option<String>,
+    /// The organization's display name, so the account can be named after it.
+    organization_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SupabaseApiOrganization {
+    id: String,
+    name: String,
+}
+
+/// Organization names by id. A convenience for naming the account; any failure
+/// just means the account gets a generic name.
+fn supabase_organization_names(access_token: &str) -> std::collections::HashMap<String, String> {
+    let fetched = ureq::get("https://api.supabase.com/v1/organizations")
+        .header("Accept", "application/json")
+        .header("Authorization", &format!("Bearer {}", access_token))
+        .call()
+        .ok()
+        .and_then(|response| response.into_body().read_to_string().ok())
+        .and_then(|text| serde_json::from_str::<Vec<SupabaseApiOrganization>>(&text).ok());
+    fetched.unwrap_or_default().into_iter().map(|org| (org.id, org.name)).collect()
 }
 
 /// List the signed-in user's Supabase projects so the desktop app can offer a
@@ -818,12 +839,14 @@ fn supabase_list_projects(access_token: String) -> Result<Vec<SupabaseProjectSum
         .map_err(|_| "Supabase returned something unexpected. Try again in a moment.".to_string())?;
     let projects: Vec<SupabaseApiProject> = serde_json::from_str(&text)
         .map_err(|_| "Supabase returned something unexpected. Try again in a moment.".to_string())?;
+    let organizations = supabase_organization_names(&access_token);
     Ok(projects
         .into_iter()
         .map(|project| SupabaseProjectSummary {
             project_ref: project.id,
             name: project.name,
             region: project.region,
+            organization_name: project.organization_id.as_ref().and_then(|id| organizations.get(id).cloned()),
             organization_id: project.organization_id,
         })
         .collect())
@@ -1471,29 +1494,82 @@ fn agent_config_path(workspace: &std::path::Path, agent_id: &str) -> Option<Path
 }
 
 fn find_node_binary() -> String {
+    let exe = if cfg!(windows) { "node.exe" } else { "node" };
     if let Some(path_var) = env::var_os("PATH") {
         for dir in env::split_paths(&path_var) {
-            let candidate = dir.join("node");
+            let candidate = dir.join(exe);
             if candidate.is_file() {
                 return candidate.to_string_lossy().into_owned();
             }
         }
     }
-    // nvm installs (GUI apps rarely inherit nvm's PATH): pick the newest version.
-    if let Ok(home) = env::var("HOME") {
-        let versions = PathBuf::from(home).join(".nvm").join("versions").join("node");
-        if let Ok(entries) = fs::read_dir(versions) {
-            let mut candidates: Vec<PathBuf> = entries
+    // GUI apps rarely inherit the shell's PATH, so look where version managers
+    // and installers put Node. Managers with many versions: newest wins.
+    let mut fixed: Vec<PathBuf> = Vec::new();
+    let mut managed: Vec<PathBuf> = Vec::new();
+    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from) {
+        managed.push(home.join(".nvm").join("versions").join("node"));
+        managed.push(home.join(".local").join("share").join("fnm").join("node-versions"));
+        managed.push(home.join("Library").join("Application Support").join("fnm").join("node-versions"));
+        fixed.push(home.join(".volta").join("bin").join(exe));
+        fixed.push(home.join(".asdf").join("shims").join(exe));
+    }
+    for dir in ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"] {
+        fixed.push(PathBuf::from(dir).join(exe));
+    }
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = env::var_os(var) {
+            fixed.push(PathBuf::from(base).join("nodejs").join(exe));
+        }
+    }
+    if let Some(found) = fixed.into_iter().find(|path| path.is_file()) {
+        return found.to_string_lossy().into_owned();
+    }
+    for root in managed {
+        if let Ok(entries) = fs::read_dir(&root) {
+            let mut versions: Vec<(Vec<u32>, PathBuf)> = entries
                 .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|path| path.join("bin").join("node").is_file())
+                .filter_map(|dir| {
+                    let binary = [dir.join("bin").join(exe), dir.join("installation").join("bin").join(exe), dir.join("installation").join(exe)]
+                        .into_iter()
+                        .find(|candidate| candidate.is_file())?;
+                    let name = dir.file_name()?.to_string_lossy().into_owned();
+                    let parts = name.trim_start_matches('v').split('.').map(|part| part.parse().unwrap_or(0)).collect();
+                    Some((parts, binary))
+                })
                 .collect();
-            candidates.sort();
-            if let Some(newest) = candidates.pop() {
-                return newest.join("bin").join("node").to_string_lossy().into_owned();
+            versions.sort();
+            if let Some((_, newest)) = versions.pop() {
+                return newest.to_string_lossy().into_owned();
             }
         }
     }
     "node".to_string()
+}
+
+/// Major version of a Node binary (`v20.11.1` -> 20), or `None` when it will not run.
+fn node_major_version(binary: &str) -> Option<u32> {
+    let output = std::process::Command::new(binary).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_node_major(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_node_major(version: &str) -> Option<u32> {
+    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+}
+
+/// The oldest Node major the bundled server supports.
+const MIN_NODE_MAJOR: u32 = 20;
+
+/// The `nexus-keyring` helper the app installs next to its own executable. The
+/// server reads approvals through it; a source checkout falls back to the
+/// server's built-in debug path.
+fn bundled_keyring_binary() -> Option<PathBuf> {
+    let dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidate = dir.join(if cfg!(windows) { "nexus-keyring.exe" } else { "nexus-keyring" });
+    candidate.is_file().then_some(candidate)
 }
 
 /// Write the agent's project MCP config so that agent routes through Nexus.
@@ -2279,24 +2355,132 @@ fn remove_nexus_connection(workspace_path: String, provider: String) -> Result<S
     Ok(manifest_path.to_string_lossy().into_owned())
 }
 
+/// The local Nexus HTTP server the app keeps running for agents. Owned here so
+/// it stops when the app closes (the vault locks then too, so agents would be
+/// refused anyway).
+#[derive(Default)]
+struct NexusServer(Mutex<Option<std::process::Child>>);
+
+#[derive(Serialize)]
+struct NexusServerStatus {
+    running: bool,
+    /// True when the fix is installing Node.js (missing or older than 20).
+    needs_node: bool,
+    started_by_app: bool,
+    url: String,
+    detail: String,
+}
+
+/// Find `mcp/nexus-http-server.mjs`: an explicit override, the app's bundled
+/// resources, or the source checkout the app was built from.
+fn nexus_server_script(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(custom) = env::var_os("NEXUS_MCP_SERVER") {
+        candidates.push(PathBuf::from(custom));
+    }
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("mcp").join("nexus-http-server.mjs"));
+        candidates.push(dir.join("_up_").join("mcp").join("nexus-http-server.mjs"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("mcp").join("nexus-http-server.mjs"));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// Start the Nexus HTTP server unless something already answers on its port.
+/// Never panics; a failure comes back as a plain-language `detail`.
+fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
+    use tauri::Manager;
+    let url = default_nexus_http_url();
+    let state = app.state::<NexusServer>();
+    let mut slot = match state.0.lock() {
+        Ok(slot) => slot,
+        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not check its local server. Restart the app.".to_string() },
+    };
+    // Forget a child that has exited so it can be started again.
+    if let Some(child) = slot.as_mut() {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            *slot = None;
+        }
+    }
+    let started_by_app = slot.is_some();
+    if probe_http_agent(&url) {
+        return NexusServerStatus { running: true, needs_node: false, started_by_app, url, detail: "Nexus is running.".to_string() };
+    }
+    let script = match nexus_server_script(app.path().resource_dir().ok()) {
+        Some(script) => script,
+        None => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not find its server files. Reinstall the app, or run `node mcp/nexus-http-server.mjs` from the project.".to_string() },
+    };
+    let node = find_node_binary();
+    match node_major_version(&node) {
+        None => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer to run its local server, and none was found. Install it from nodejs.org, then reopen Nexus.") },
+        Some(major) if major < MIN_NODE_MAJOR => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer, but found version {major}. Update it from nodejs.org, then reopen Nexus.") },
+        Some(_) => {}
+    }
+    let mut command = std::process::Command::new(&node);
+    if env::var_os("NEXUS_KEYRING_BIN").is_none() {
+        if let Some(keyring) = bundled_keyring_binary() {
+            command.env("NEXUS_KEYRING_BIN", keyring);
+        }
+    }
+    let child = command
+        .arg(&script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(child) => *slot = Some(child),
+        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not start its local server. Check that Node.js runs from a terminal, then reopen Nexus.".to_string() },
+    }
+    drop(slot);
+    for _ in 0..30 {
+        thread::sleep(std::time::Duration::from_millis(100));
+        if probe_http_agent(&url) {
+            return NexusServerStatus { running: true, needs_node: false, started_by_app: true, url, detail: "Nexus started.".to_string() };
+        }
+    }
+    NexusServerStatus { running: false, needs_node: false, started_by_app: true, url, detail: "Nexus started its server but it is not answering yet. Another program may be using the port.".to_string() }
+}
+
+#[tauri::command]
+fn ensure_nexus_server(app: tauri::AppHandle) -> NexusServerStatus {
+    ensure_nexus_server_running(&app)
+}
+
+fn stop_nexus_server(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Ok(mut slot) = app.state::<NexusServer>().0.lock() {
+        if let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|_| {
+        .setup(|app| {
             // A new desktop process always starts locked. The HTTP bridge treats
             // a missing state file as locked as well, so a crash cannot leave a
             // stale unlocked state behind for normal app startup.
             let _ = write_vault_state(true);
+            // Bring the local Nexus server up in the background so agents have
+            // something to reach without a terminal.
+            let handle = app.handle().clone();
+            thread::spawn(move || { let _ = ensure_nexus_server_running(&handle); });
             Ok(())
         })
-        .on_window_event(|_, event| {
+        .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let _ = write_vault_state(true);
+                { use tauri::Manager; stop_nexus_server(window.app_handle()); }
             }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(OAuthManager::default())
+        .manage(NexusServer::default())
         // IMPORTANT: Tauri converts each command parameter name to lowerCamelCase
         // before matching request args. The frontend must therefore send camelCase
         // keys (workspacePath, projectId, …) even though Rust names stay snake_case.
@@ -2323,7 +2507,8 @@ pub fn run() {
             import_agent_entry,
             remove_agent_entry,
             test_agent_setup,
-            node_binary_path
+            node_binary_path,
+            ensure_nexus_server
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");
@@ -2333,6 +2518,20 @@ pub fn run() {
 mod agent_setup_tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn node_versions_parse_to_a_major() {
+        assert_eq!(parse_node_major("v20.11.1\n"), Some(20));
+        assert_eq!(parse_node_major("v18.0.0"), Some(18));
+        assert_eq!(parse_node_major("26.3.0"), Some(26));
+        assert_eq!(parse_node_major("not node"), None);
+    }
+
+    #[test]
+    fn server_script_is_found_in_the_source_checkout() {
+        let script = nexus_server_script(None).expect("source checkout has the server script");
+        assert!(script.ends_with("nexus-http-server.mjs"));
+    }
 
     // The HTTP bridge refuses a request that names no workspace, so every
     // registration Nexus writes must carry this project's path.

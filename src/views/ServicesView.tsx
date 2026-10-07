@@ -175,7 +175,7 @@ function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRe
             </form>
           )}
           {accounts.length === 0 && !linking ? (
-            <p className="rounded-[12px] border border-dashed border-(--line) px-4 py-5 text-center text-[12.5px] text-(--muted)">Link a {service.provider} login once, then bind it to projects under Bindings.</p>
+            <p className="rounded-[12px] border border-dashed border-(--line) px-4 py-5 text-center text-[12.5px] text-(--muted)">Link a {service.provider} account once, then bind it to projects from the Project page.</p>
           ) : (
             <div className="rounded-[12px] border border-(--line)">
               {accounts.map((account, index) => {
@@ -214,8 +214,8 @@ function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRe
       </div>
 
       <div className="flex shrink-0 items-center gap-3 border-t border-(--line-soft) px-5 py-3">
-        <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Next: bind an account and resource per project under Bindings.</span>
-        <Button size="sm" variant="outline" onPress={onOpenBindings}>Open Bindings</Button>
+        <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Next: bind an account and resource per project from the Project page.</span>
+        <Button size="sm" variant="outline" onPress={onOpenBindings}>Open project bindings</Button>
       </div>
     </Card>
   );

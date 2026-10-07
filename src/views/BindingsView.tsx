@@ -14,12 +14,11 @@ type Patch = { target: string; detail: string; tone: Connection["tone"]; project
 /** Project bindings as a list plus a detail panel for the selected one.
  *  Editing is inline; saving goes through the same confirm-with-diff step the
  *  old Edit modal used (paper §8: binding edits need developer confirmation). */
-export function BindingsView({ project, projects, accounts, onAdd, onSelectProject, onUpdate, vaultUnlocked, savedKeys, onSaveKey, onRemove, onOpenServices }: {
+export function BindingsView({ project, projects, accounts, onAdd, onUpdate, vaultUnlocked, savedKeys, onSaveKey, onRemove, onOpenServices }: {
   project: Project;
   projects: Project[];
   accounts: Account[];
   onAdd: () => void;
-  onSelectProject: (id: string) => void;
   onUpdate: (projectId: string, connectionId: string, patch: Patch) => void;
   vaultUnlocked: boolean;
   savedKeys: Record<string, boolean>;
@@ -45,13 +44,7 @@ export function BindingsView({ project, projects, accounts, onAdd, onSelectProje
   return (
     <div className="app-view flex min-h-0 w-full flex-1 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 text-[12px] text-(--muted)">
-          Project
-          <select value={project.id} onChange={(event) => onSelectProject(event.target.value)} aria-label="Project" className={`${selectClass} !h-9 !w-auto min-w-[160px]`}>
-            {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </label>
-        <p className="min-w-0 flex-1 truncate text-[12.5px] text-(--muted)">Link a login once under Services, then bind one account and resource per project here. Never raw secrets.</p>
+        <p className="min-w-0 flex-1 truncate text-[12.5px] text-(--muted)">Link an account once in Accounts, then bind one account and resource per project here. Never raw secrets.</p>
         <Button size="sm" onPress={onAdd}><NxIcon name="plus" size={15} />Add binding</Button>
       </div>
 
@@ -196,7 +189,7 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
               {matching.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.id}</option>)}
             </select>
             {matching.length === 0 && (
-              <span className="flex flex-wrap items-center gap-2 text-[11.5px] leading-[1.5]">No {connection.provider} account linked yet.{onOpenServices && <button type="button" onClick={onOpenServices} className="underline underline-offset-2 hover:text-(--text)">Open Services</button>}</span>
+              <span className="flex flex-wrap items-center gap-2 text-[11.5px] leading-[1.5]">No {connection.provider} account linked yet.{onOpenServices && <button type="button" onClick={onOpenServices} className="underline underline-offset-2 hover:text-(--text)">Open Accounts</button>}</span>
             )}
           </label>
           <div className="nx-field">

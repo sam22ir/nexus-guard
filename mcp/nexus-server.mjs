@@ -931,6 +931,9 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
 
     if (name === CONTEXT_TOOL || name === CONTEXT_TOOL_UNDERSCORE || name === PROJECT_TOOL_LEGACY) {
       const deprecated = name === PROJECT_TOOL_LEGACY;
+      // A resolved context call is the first thing an agent does; recording it
+      // lets the desktop app show "your agent reached Nexus" during setup.
+      await audit({ ...auditRecord({ sessionId: auditSid, context, connection: null, operation: CONTEXT_TOOL, decision: "allow", reason: null }), __context: context });
       return jsonResult({ ...context, safety: "Connection identity only. No credentials are returned.", ...(deprecated ? { deprecated: true, deprecation: "Use nexus.context instead. This alias will be removed next release." } : {}) });
     }
     if (name === CHECK_TOOL_LEGACY) {
@@ -1095,7 +1098,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
   return server;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (!globalThis.__NEXUS_BUNDLED && process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   if (!stdioGateAllows()) {
     console.error("Nexus stdio entrypoint is deprecated and disabled by default. Use the persistent HTTP instance (http://localhost:3939/mcp) or set NEXUS_ALLOW_STDIO=1 to allow stdio for one release.");
     process.exit(1);

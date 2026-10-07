@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { desktopAvailable, hasPublishableKey, listSupabaseProjects, lockVault, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
+import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
 import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
 import { ThemeButton, initTheme } from "./onboarding";
+import { useAuditLog } from "./app/audit";
 import { FirstRun } from "./views/FirstRun";
+import { ProjectPage } from "./views/ProjectPage";
+import { ConnectionsPage } from "./views/ConnectionsPage";
 import { Button } from "@heroui/react";
 import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
-import { type View, type ErrorRetry, type ErrorRecord } from "./app/types";
+import { type View, type NavTarget, type ProjectTab, type ConnectionsTab, type ErrorRetry, type ErrorRecord } from "./app/types";
 import { GUARD_VISIBLE } from "./app/styles";
 import { errorIdentity, loadErrorLog } from "./app/errors";
 import { Overview } from "./views/OverviewView";
-import { ProjectsView } from "./views/ProjectsView";
 import { AgentsView } from "./views/AgentsView";
 import { BindingsView } from "./views/BindingsView";
 import { ServicesView } from "./views/ServicesView";
@@ -30,6 +32,8 @@ import "./App.css";
 
 function App() {
   const [view, setView] = useState<View>("home");
+  const [projectTab, setProjectTab] = useState<ProjectTab>("status");
+  const [connectionsTab, setConnectionsTab] = useState<ConnectionsTab>("accounts");
   const [projects, setProjects] = useState<Project[]>(loadProjects);
   const [accounts, setAccounts] = useState<Account[]>(loadAccounts);
   const [selectedProject, setSelectedProject] = useState(() => window.localStorage.getItem("nexus-guard.selected-project") ?? "koupa");
@@ -47,8 +51,14 @@ function App() {
   const [notice, setNotice] = useState("");
   const [errorLog, setErrorLog] = useState<ErrorRecord[]>(loadErrorLog);
   const [osUser, setOsUser] = useState("Local");
-  const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
+  // Lookups made in the same tick as a new account (add-binding creates one inline) must see it.
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
   const project = useMemo(() => projects.find((item) => item.id === selectedProject || item.name === selectedProject) ?? projects[0], [projects, selectedProject]);
+  // Setup counts as done once any agent has called Nexus. A skipped setup resumes at the agent step for the selected real project.
+  const { entries: auditEntries, loaded: auditLoaded } = useAuditLog(projects);
+  const setupIncomplete = auditLoaded && !auditEntries.some((entry) => entry.agent);
+  const resumeProject = project && setupIncomplete && !starterProjects.some((item) => item.id === project.id) ? project : null;
 
   // Theme ownership lives in onboarding.tsx (initTheme/ThemeToggle):
   // apply the stored/OS choice once at boot. First paint is already
@@ -81,7 +91,7 @@ function App() {
     const message =
       where === "Saving project file" || where === "Linking Supabase project"
         ? "Nexus could not write the project file. Check the folder still exists and is writable, then retry."
-        : where === "Removing connection"
+        : where === "Removing binding"
           ? "The project file still lists this connection. Retry to finish removing it."
           : "Something failed. Try again, and check Activity if it keeps happening.";
     console.error(`[nexus] ${where}`, error);
@@ -148,7 +158,7 @@ function App() {
 
   function selectProject(id: string) {
     setSelectedProject(id);
-    setView("overview");
+    navigate("overview");
   }
 
   function dismissOnboarding() {
@@ -189,7 +199,7 @@ function App() {
     };
     setProjects((current) => [...current, newProject]);
     setSelectedProject(newProject.id);
-    if (!options?.stay) { setView("overview"); setModal(null); }
+    if (!options?.stay) { navigate("overview"); setModal(null); }
     // Manifest sync (paper: discovery != registration — local create is not
     // on-disk until the project file is written). Runs async; the local
     // create above is already done so the UI never blocks on the backend.
@@ -199,7 +209,7 @@ function App() {
         const inspection = await invoke<{ exists: boolean; is_dir: boolean }>("inspect_project_folder", { workspacePath: newProject.path });
         if (!inspection.exists || !inspection.is_dir) {
           if (!window.confirm(`Project folder “${newProject.path}” does not exist yet. Create it now?`)) {
-            setNotice("Project saved here. Its folder does not exist yet — create it, then verify on Overview so agents resolve it.");
+            setNotice("Project saved here. Its folder does not exist yet — create it, then check the project file on the Project page so agents resolve it.");
             return;
           }
           await invoke<string>("create_project_folder", { workspacePath: newProject.path });
@@ -223,10 +233,10 @@ function App() {
             repo: newProject.repo && newProject.repo !== "Not connected" ? newProject.repo : null,
             branch: newProject.branch ?? null,
           });
-          setNotice(`Saved the safe Nexus project file at ${filePath}. Link a service under Services, then bind it, to add its resource.`);
+          setNotice(`Saved the safe Nexus project file at ${filePath}. Add a binding from the Project page to attach a resource.`);
         } catch (error) {
           reportError("Saving project file", error);
-          setNotice("Project saved here, but Nexus could not write the project file. Check the folder still exists and is writable, then verify on Overview.");
+          setNotice("Project saved here, but Nexus could not write the project file. Check the folder still exists and is writable, then check the project file on the Project page.");
         }
         return;
       }
@@ -254,11 +264,11 @@ function App() {
     if (old.branch !== (patch.branch || "main")) diffLines.push(`branch: “${old.branch}” → “${patch.branch || "main"}”`);
     if (old.environment !== patch.environment) diffLines.push(`environment: “${old.environment}” → “${patch.environment}”`);
     if (diffLines.length === 0) { setModal(null); return; }
-    if (!window.confirm(`Update project “${old.name}”?\n\n${diffLines.join("\n")}\n\nAgents resolve the on-disk file until re-saved — re-verify the folder on Overview afterwards.`)) return;
+    if (!window.confirm(`Update project “${old.name}”?\n\n${diffLines.join("\n")}\n\nAgents resolve the on-disk file until re-saved — re-check the project file on the Project page afterwards.`)) return;
     const updated: Project = { ...old, name: patch.name, initials: initialsFor(patch.name), path: patch.path, repo: patch.repo || "Not connected", branch: patch.branch || "main", environment: patch.environment, lastSeen: "Updated just now" };
     setProjects((current) => current.map((item) => item.id === projectId ? updated : item));
     setModal(null);
-    setNotice("Project updated. Re-verify the folder on Overview so agents resolve the new details.");
+    setNotice("Project updated. Re-check the project file on the Project page so agents resolve the new details.");
     // Best-effort manifest re-sync for the new workspace details.
     void (async () => {
       if (!desktopAvailable()) return;
@@ -313,7 +323,7 @@ function App() {
       ? { ...item, connections: item.connections.map((c) => c.id === connectionId ? updatedConnection : c) }
       : item));
     setModal(null);
-    setNotice("Connection updated. Nexus re-saved the on-disk project file.");
+    setNotice("Binding updated. Nexus re-saved the on-disk project file.");
     void (async () => {
       if (!desktopAvailable()) return;
       try {
@@ -351,7 +361,7 @@ function App() {
 
   function addConnection(input: { provider: string; target: string; detail: string; tone: Connection["tone"]; method: Connection["method"]; authState: Connection["authState"]; projectRef?: string; url?: string; accountId?: string }) {
     if (!project) return;
-    const accountEntry = accounts.find((a) => a.id === input.accountId && a.provider.toLowerCase() === input.provider.toLowerCase());
+    const accountEntry = accountsRef.current.find((a) => a.id === input.accountId && a.provider.toLowerCase() === input.provider.toLowerCase());
     const accountId = accountEntry?.id;
     const accountLabel = accountEntry?.label;
     const newConnection: Connection = {
@@ -377,7 +387,7 @@ function App() {
     const owner = project;
     void syncNexusProjectFile(owner, newConnection).then((filePath) => {
       if (filePath) setNotice(`Saved the safe Nexus project file at ${filePath}.`);
-    }).catch((error) => { reportError("Saving project file", error, { kind: "write-file", projectId: owner.id, connectionId: newConnection.id }); setNotice("Connection saved, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity."); });
+    }).catch((error) => { reportError("Saving project file", error, { kind: "write-file", projectId: owner.id, connectionId: newConnection.id }); setNotice("Binding saved, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity."); });
   }
 
   /** Retry a kept failure from the Activity error log. */
@@ -392,7 +402,7 @@ function App() {
     const target = projects.find((item) => item.id === retryProjectId);
     const connection = target?.connections.find((c) => c.id === retryConnectionId);
     if (!target || !connection) {
-      setNotice("That connection is gone, so there is nothing to retry. The error is kept for reference.");
+      setNotice("That binding is gone, so there is nothing to retry. The error is kept for reference.");
       return;
     }
     if (retryKind === "remove") {
@@ -429,7 +439,7 @@ function App() {
   }
 
   type McpOAuthTokens = { accessToken: string; refreshToken?: string; scope?: string };
-  type SupabaseChoice = { ref: string; name: string; region?: string | null };
+  type SupabaseChoice = { ref: string; name: string; region?: string | null; organization_name?: string | null };
 
   /** Backend detail is never shown — surface the plain fallback with its next step. */
   function commandMessage(_error: unknown, fallback: string): string {
@@ -449,7 +459,7 @@ function App() {
 
   async function pollMcpOAuth(signal?: AbortSignal): Promise<McpOAuthTokens> {
     function cancelledError(): Error {
-      const error = new Error("The connection request was cancelled.");
+      const error = new Error("The browser approval was cancelled.");
       error.name = "AbortError";
       return error;
     }
@@ -460,11 +470,11 @@ function App() {
       if (signal?.aborted) throw cancelledError();
       const result = await invoke<OAuthResult | null>("poll_supabase_mcp_oauth");
       if (result) {
-        if (!result.success || !result.access_token) throw new Error("The browser approval timed out. Start the connection again and approve within a few minutes.");
+        if (!result.success || !result.access_token) throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
         return { accessToken: result.access_token, refreshToken: result.refresh_token, scope: result.scope };
       }
     }
-    throw new Error("The browser approval timed out. Start the connection again and approve within a few minutes.");
+    throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
   }
 
   /** Step 1 of connect-first MCP: browser approval + token save under a pending connection. Returns the user's Supabase projects to pick from. */
@@ -475,7 +485,7 @@ function App() {
     // browser approval is in flight, and the pending binding belongs here.
     const owner = project;
     const projectId = owner.id;
-    const accountEntry = accountId ? accounts.find((a) => a.id === accountId) : undefined;
+    const accountEntry = accountId ? accountsRef.current.find((a) => a.id === accountId) : undefined;
     const connection: Connection = {
       id: makeId("connection"),
       provider: "Supabase",
@@ -527,9 +537,16 @@ function App() {
     // switched projects while the browser approval was in flight.
     const owner = projects.find((item) => item.id === ownerProjectId);
     const linked: Connection | undefined = owner?.connections.find((c) => c.id === connectionId);
-    if (!owner || !linked) throw new Error("That connection request is gone. Start the connection again.");
+    if (!owner || !linked) throw new Error("That approval request is gone. Start again.");
+    // The approval proves which Supabase account this is, so name ours after its organization
+    // and reuse it for every project in that organization. An account picked earlier is kept.
+    const accountId = linked.accountId ?? createAccount({ provider: "Supabase", label: choice.organization_name?.trim() || "personal" });
+    const accountEntry = accountsRef.current.find((a) => a.id === accountId);
+    const sharedWith = projects.filter((item) => item.id !== ownerProjectId && item.connections.some((c) => c.provider === "Supabase" && c.accountId === accountId));
     const connectedConnection: Connection = {
       ...linked,
+      accountId,
+      account: accountEntry?.label ?? accountId,
       target: choice.name,
       resource: choice.name,
       projectRef: choice.ref,
@@ -540,8 +557,8 @@ function App() {
     setModal(null);
     try {
       const filePath = await syncNexusProjectFile(owner, connectedConnection, "connected");
-      const unlinked = !connectedConnection.accountId && !connectedConnection.account;
-      const suffix = unlinked ? " No Services account is linked — open Bindings → Edit on this connection to pick one so the topology shows the right login." : " Its approval is stored in the desktop vault.";
+      const shared = sharedWith.length > 0 ? ` This Supabase account is also used by ${sharedWith.map((item) => item.name).join(", ")}, so one credential reaches all of them.` : "";
+      const suffix = ` Linked to your Supabase account “${connectedConnection.account}”. Its approval is stored in the desktop vault.${shared}`;
       setNotice(filePath ? `Supabase is connected. Nexus wrote ${filePath}.${suffix}` : `Supabase is connected.${suffix}`);
     } catch (error) {
       reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId });
@@ -573,16 +590,31 @@ function App() {
       return next;
     });
     if (!desktopAvailable()) {
-      setNotice("Connection removed from this app. Open the desktop app to also unlink its Nexus project file.");
+      setNotice("Binding removed from this app. Open the desktop app to also unlink its Nexus project file.");
       return;
     }
     try {
       const filePath = await invoke<string>("remove_nexus_connection", { workspacePath: holder.path, provider: connection.provider });
-      setNotice(`Connection removed. Nexus updated ${filePath}.`);
+      setNotice(`Binding removed. Nexus updated ${filePath}.`);
     } catch (error) {
-      reportError("Removing connection", error, { kind: "remove", projectId, connectionId: connection.id });
+      reportError("Removing binding", error, { kind: "remove", projectId, connectionId: connection.id });
       setNotice("Removed here, but the project file still lists it. Retry from Activity to finish removing it.");
     }
+  }
+
+  /** Create a linked account without a notice and return its id (the existing id when the same account is already linked). */
+  function createAccount(input: { provider: string; label: string }): string {
+    const provider = input.provider.trim();
+    const label = input.label.trim() || "personal";
+    const current = accountsRef.current;
+    // Linking the same login twice reuses it. makeAccountId alone would mint "-2".
+    const existing = current.find((a) => a.provider.toLowerCase() === provider.toLowerCase() && a.label.trim().toLowerCase() === label.toLowerCase());
+    if (existing) return existing.id;
+    const id = makeAccountId(provider, label, current);
+    const next = [...current, { id, label, provider, authState: "not_connected" as const }];
+    accountsRef.current = next;
+    setAccounts(next);
+    return id;
   }
 
   function addAccount(input: { provider: string; label: string }) {
@@ -595,7 +627,7 @@ function App() {
       return;
     }
     setAccounts((current) => [...current, { id, label, provider, authState: "not_connected" }]);
-    setNotice(`${provider} account “${label}” added. Bind it to a project under Bindings.`);
+    setNotice(`${provider} account “${label}” added. Bind it to a project from the Project page (Bindings).`);
   }
 
   async function removeAccount(accountId: string) {
@@ -618,21 +650,28 @@ function App() {
     setNotice("Guard rules are hidden in this build — per-binding rules are not editable. Calls are logged on Home and Activity.");
   }
 
+  /** Open a page; older names (overview, bindings, services, agents) land on the right section. */
+  function navigate(target: NavTarget) {
+    switch (target) {
+      case "overview": case "projects": setProjectTab("status"); setView("project"); break;
+      case "bindings": setProjectTab("bindings"); setView("project"); break;
+      case "services": setConnectionsTab("accounts"); setView("connections"); break;
+      case "agents": setConnectionsTab("agents"); setView("connections"); break;
+      default: setView(target);
+    }
+  }
+
   const viewLabels: Record<View, string> = {
     home: "Home",
-    overview: "Overview",
-    projects: "Projects",
-    agents: "Agents",
-    bindings: "Bindings",
-    services: "Services",
+    project: "Project",
+    connections: "Accounts & agents",
     guard: "Guard rules",
     activity: "Activity",
     settings: "Settings",
   };
 
-  const connectedApprovals = projects.reduce((count, item) => count + item.connections.filter((c) => c.authState === "connected").length, 0);
   const currentLabel = viewLabels[view] ?? view;
-  const scopedView = view === "overview" || view === "bindings" || view === "activity";
+  const scopedView = view === "project" || view === "activity";
 
   // Connections whose account is also bound to another project (paper §6):
   // marked on the canvas and named in the link/unlink confirm steps.
@@ -649,14 +688,14 @@ function App() {
   }, [projects, accounts]);
 
   /** Drag-to-link: the canvas only asks. Open the same binding picker the
-   *  Bindings tab uses, prefilled from the drag; nothing saves until confirmed. */
+   *  Project page uses, prefilled from the drag; nothing saves until confirmed. */
   function requestLink(request: PendingLinkRequest) {
     const nodes = [request.from, request.to];
     const projectNode = nodes.find((node) => node.kind === "project");
     const serviceNode = nodes.find((node) => node.kind === "service");
     if (!projectNode || !serviceNode) {
       setNotice(nodes.some((node) => node.kind === "agent")
-        ? "Agents connect from the Agents tab, and the project they work in is resolved automatically. Drag a service onto a project to link it."
+        ? "Agents connect from Accounts, and the project they work in is resolved automatically. Drag a service onto a project to link it."
         : "Drag a service onto a project to link it.");
       return;
     }
@@ -685,36 +724,16 @@ function App() {
 
   const navItems: NavItem<View>[] = [
     { id: "home", label: "Home", icon: "home" },
-    { id: "projects", label: "Projects", icon: "folder" },
-    { id: "overview", label: "Overview", icon: "grid" },
-    { id: "bindings", label: "Bindings", icon: "link" },
+    { id: "project", label: "Project", icon: "folder" },
     { id: "activity", label: "Activity", icon: "activity" },
-    { id: "services", label: "Services", icon: "services" },
-    { id: "agents", label: "Agents", icon: "agents" },
+    { id: "connections", label: "Accounts", icon: "link" },
     ...(GUARD_VISIBLE ? [{ id: "guard" as const, label: "Guard", icon: "shield" as const }] : []),
   ];
 
   const railFooter = (
     <>
-      <div className="relative w-full">
-        <button type="button" aria-expanded={vaultMenuOpen} onClick={() => setVaultMenuOpen((open) => !open)} className="nx-nav-item" title={vaultUnlocked ? "Vault unlocked" : "Vault locked"}>
-          <NxIcon name={vaultUnlocked ? "unlock" : "lock"} size={20} />
-          {vaultUnlocked ? "Unlocked" : "Locked"}
-        </button>
-        {vaultMenuOpen && (
-          <div className="nx-notice absolute bottom-2 left-full z-40 ml-3 w-[280px] flex-col !items-stretch gap-1" style={{ boxShadow: "var(--shadow-pop)" }} role="status">
-            <strong>{vaultUnlocked ? "Desktop vault unlocked" : "Desktop vault locked"}</strong>
-            <span className="nx-muted">{connectedApprovals} approval{connectedApprovals === 1 ? "" : "s"} saved · OS keychain holds the secrets</span>
-            <span className="nx-muted">{desktopAvailable() ? "MCP approvals save without unlocking. Typed keys unlock inline." : "Open the desktop app to manage the vault."}</span>
-            <div className="mt-2 flex gap-2">
-              <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); setView("settings"); }}>Open settings</Button>
-              {vaultUnlocked && <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); void lockVault().then(() => setVaultUnlocked(false)).catch(() => undefined); }}>Lock now</Button>}
-            </div>
-          </div>
-        )}
-      </div>
-      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
-        <NxIcon name="settings" size={20} />
+      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title={vaultUnlocked ? "Settings · vault unlocked" : "Settings · vault locked"}>
+        <NxIcon name={vaultUnlocked ? "unlock" : "settings"} size={20} />
         Settings
       </button>
       <span className="nx-user" title={osUser}>{osUser.slice(0, 1).toUpperCase()}</span>
@@ -726,18 +745,18 @@ function App() {
       <AppShell
         nav={navItems}
         active={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         railFooter={railFooter}
         crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
-        fill={view === "home" || view === "overview" || view === "bindings" || view === "services" || view === "agents"}
+        fill={view === "home" || view === "project" || view === "connections"}
         actions={
           <>
             <ThemeButton />
             {view === "home" && (
               <>
-                <Button variant="ghost" size="sm" onPress={() => setOnboardingOpen(true)}>Finish setup</Button>
-                <Button size="sm" onPress={() => setView("agents")}><NxIcon name="plus" size={15} />Connect agent</Button>
+                {setupIncomplete && <Button variant="ghost" size="sm" onPress={() => setOnboardingOpen(true)}>{resumeProject ? `Finish setting up ${resumeProject.name}` : "Finish setup"}</Button>}
+                <Button size="sm" onPress={() => navigate("agents")}><NxIcon name="plus" size={15} />Connect agent</Button>
               </>
             )}
           </>
@@ -752,12 +771,21 @@ function App() {
           </>
         }
       >
-              {view === "home" && <HomeView projects={projects} accounts={accounts} sharedConnectionIds={sharedConnectionIds} linkDraft={linkDraft} onConfirmLink={confirmLink} onCancelLink={() => setLinkDraft(null)} onContinueInPicker={() => { if (linkDraft) { setLinkPrefill({ provider: linkDraft.provider, accountId: linkDraft.accountId }); setLinkDraft(null); setModal("connection"); } }} onView={setView} onSelectProject={selectProject} onRequestLink={requestLink} onUnlink={unlinkFromCanvas} />}
-      {view === "overview" && <Overview project={project} projects={projects} accounts={accounts} onView={setView} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />}
-      {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
-      {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
-      {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onSelectProject={setSelectedProject} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => setView("services")} />}
-      {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => setView("bindings")} />}
+              {view === "home" && <HomeView projects={projects} accounts={accounts} sharedConnectionIds={sharedConnectionIds} linkDraft={linkDraft} onConfirmLink={confirmLink} onCancelLink={() => setLinkDraft(null)} onContinueInPicker={() => { if (linkDraft) { setLinkPrefill({ provider: linkDraft.provider, accountId: linkDraft.accountId }); setLinkDraft(null); setModal("connection"); } }} onView={navigate} onSelectProject={selectProject} onRequestLink={requestLink} onUnlink={unlinkFromCanvas} />}
+      {view === "project" && (
+        <ProjectPage project={project} projects={projects} tab={projectTab} onTab={setProjectTab} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)}>
+          {project && (projectTab === "status"
+            ? <Overview project={project} projects={projects} accounts={accounts} onView={navigate} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />
+            : <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => navigate("services")} />)}
+        </ProjectPage>
+      )}
+      {view === "connections" && (
+        <ConnectionsPage tab={connectionsTab} onTab={setConnectionsTab}>
+          {connectionsTab === "accounts"
+            ? <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => navigate("bindings")} />
+            : <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
+        </ConnectionsPage>
+      )}
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
       {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
@@ -772,27 +800,26 @@ function App() {
         setAccounts(starterAccounts);
         setSelectedProject(starterProjects[0].id);
         setErrorLog([]);
-        setView("overview");
-        setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per connection if needed.");
+        navigate("overview");
+        setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per binding if needed.");
       }} />}
       </AppShell>
 
       {onboardingOpen && (
         <FirstRun
+          resumeProject={resumeProject}
           projects={projects}
-          accounts={accounts}
           onRegister={(input) => addProject(input, { stay: true })}
-          onAddAccount={addAccount}
           onOpenAddBinding={(projectId) => { setSelectedProject(projectId); setModal("connection"); }}
           onOpenConnectAgent={openConnectAgent}
           onSkip={dismissOnboarding}
-          onFinish={() => { dismissOnboarding(); setView("home"); }}
+          onFinish={() => { dismissOnboarding(); navigate("home"); }}
         />
       )}
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onClose={() => { setModal(null); setLinkPrefill(null); }} onOpenServices={() => { setModal(null); setLinkPrefill(null); setView("services"); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );

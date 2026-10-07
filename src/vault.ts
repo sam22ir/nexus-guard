@@ -77,7 +77,7 @@ export async function removeMcpTokens(projectId: string, connectionId: string): 
   await invoke("vault_delete_secret", { key: mcpKey(projectId, connectionId) });
 }
 
-export type SupabaseProjectChoice = { ref: string; name: string; region?: string | null; organization_id?: string | null };
+export type SupabaseProjectChoice = { ref: string; name: string; region?: string | null; organization_id?: string | null; organization_name?: string | null };
 
 export async function listSupabaseProjects(accessToken: string): Promise<SupabaseProjectChoice[]> {
   // No app-session gate: called with a just-approved token during connection setup.

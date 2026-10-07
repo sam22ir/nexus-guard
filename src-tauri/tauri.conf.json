@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.nexusguard.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "node scripts/prepare-bundle.mjs dev && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node scripts/prepare-bundle.mjs release && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -32,6 +32,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/mcp/nexus-http-server.mjs": "mcp/nexus-http-server.mjs"
+    },
+    "externalBin": [
+      "binaries/nexus-keyring"
     ]
   }
 }
