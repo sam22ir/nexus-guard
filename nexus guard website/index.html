@@ -18,7 +18,7 @@
     <meta property="og:site_name" content="Nexus" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Nexus : Connect your agents once. Link your services once." />
-    <meta name="twitter:description" content="Keeps each coding agent in its own project. Built for Linux." />
+    <meta name="twitter:description" content="Keeps each coding agent in its own project. Alpha for Linux, macOS and Windows." />
     <meta name="twitter:image" content="/og-card.png" />
     <title>Nexus : Connect your agents once. Link your services once.</title>
     <script>
@@ -33,11 +33,11 @@
     <div id="root"></div>
     <noscript>
       <h1>Nexus: connect your agents once. Link your services once.</h1>
-      <p>Nexus sits between your coding agents and your services. It sends each agent to its own project's account, so an agent working on one project can't touch another's. Built for Linux. This page needs JavaScript for the interactive parts; this is the same content in short.</p>
+      <p>Nexus sits between your coding agents and your services. It sends each agent to its own project's account, so an agent working on one project can't touch another's. Alpha for Linux, macOS and Windows. This page needs JavaScript for the interactive parts; this is the same content in short.</p>
       <h2>How it works</h2>
       <p>The agent asks Nexus for a service. Nexus works out which project the agent is in, finds the account and resource linked to that project, and makes the call with that account's login. The agent never sees the key. If Nexus can't tell the project, or the project isn't registered, it refuses.</p>
       <h2>What it covers</h2>
-      <p>About 50 popular services to start, with built-in support for Supabase and GitHub. Claude Code, Codex and OpenCode connect to one local Nexus. A risk-review layer called Guard may come later. Nexus is not a password manager or a file sandbox, and it can't protect anything an agent does without going through it.</p>
+      <p>Supabase and GitHub built in, 24 more services through their own sign-in (Notion, Linear, Sentry, Stripe, Neon and others), and any service with a public MCP address. Only actions a service marks read-only go through unless you allow safe writes for a binding. Claude Code, Codex and OpenCode connect to one local Nexus. Nexus is not a password manager or a file sandbox, and it can't protect anything an agent does without going through it.</p>
       <p>Short version for machines: <a href="/llms.txt">llms.txt</a>.</p>
     </noscript>
     <script type="module" src="/src/main.tsx"></script>

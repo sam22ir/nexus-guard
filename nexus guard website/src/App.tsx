@@ -18,13 +18,10 @@ import {
 } from "@phosphor-icons/react";
 import { flushSync } from "react-dom";
 import {
-  siAlgolia, siAsana, siAuth0, siClaude, siClerk, siCloudflare, siCloudinary, siConfluence,
-  siConvex, siCursor, siDatadog, siDigitalocean, siDiscord, siElevenlabs, siFigma, siFirebase,
-  siFlydotio, siGithub, siGithubcopilot, siGitlab, siGoogledrive, siGooglegemini, siGrafana,
-  siHuggingface, siJira, siLemonsqueezy, siLinear, siMixpanel, siMongodb, siNeon, siNetlify,
-  siNotion, siOpencode, siPaddle, siPaypal, siPlanetscale, siPosthog, siRailway, siRender,
-  siReplicate, siResend, siSanity, siSentry, siStripe, siSupabase, siTurso, siUpstash, siVercel,
-  siWindsurf,
+  siAirtable, siClaude, siCloudflare, siCloudinary, siConfluence, siCursor, siFigma, siGithub,
+  siGitlab, siGooglegemini, siHuggingface, siJira, siLinear, siMixpanel, siNeon, siNetlify,
+  siNotion, siOpencode, siPaypal, siPlanetscale, siPosthog, siRailway, siResend, siSanity,
+  siSentry, siStripe, siSupabase, siVercel, siWebflow, siWindsurf, siZapier,
 } from "simple-icons";
 import "./theme.css";
 import "./App.css";
@@ -236,7 +233,7 @@ function Navbar({
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <a href="#waitlist" className="btn btn-primary nav-cta">Get notified</a>
+          <a href="#download" className="btn btn-primary nav-cta">Get the alpha</a>
           <button
             type="button"
             className="icon-btn menu-btn"
@@ -253,7 +250,7 @@ function Navbar({
         {NAV.map((n) => (
           <a key={n.href} href={n.href} onClick={() => setOpen(false)}>{n.label}</a>
         ))}
-        <a href="#waitlist" onClick={() => setOpen(false)}>Get notified</a>
+        <a href="#download" onClick={() => setOpen(false)}>Get the alpha</a>
       </nav>
     </header>
   );
@@ -279,11 +276,11 @@ const T_PROJECTS: { name: ProjectName; sub: string; y: number }[] = [
   { name: "Koupa", sub: "production", y: 118 },
   { name: "Nabdh", sub: "development", y: 246 },
 ];
-const T_SERVICES: { id: string; svc: string; account: string; resource: string; tier: "BUILT-IN" | "CATALOG"; project: ProjectName; y: number }[] = [
+const T_SERVICES: { id: string; svc: string; account: string; resource: string; tier: "BUILT-IN" | "SIGN-IN"; project: ProjectName; y: number }[] = [
   { id: "k-sb", svc: "Supabase", account: "Personal", resource: "koupa-production", tier: "BUILT-IN", project: "Koupa", y: 52 },
   { id: "k-gh", svc: "GitHub", account: "Personal", resource: "koupa", tier: "BUILT-IN", project: "Koupa", y: 132 },
   { id: "n-sb", svc: "Supabase", account: "Client", resource: "nabdh-development", tier: "BUILT-IN", project: "Nabdh", y: 212 },
-  { id: "n-cv", svc: "Convex", account: "Personal", resource: "nabdh-backend", tier: "CATALOG", project: "Nabdh", y: 292 },
+  { id: "n-nt", svc: "Notion", account: "Personal", resource: "Nabdh docs", tier: "SIGN-IN", project: "Nabdh", y: 292 },
 ];
 
 function edge(x1: number, y1: number, x2: number, y2: number) {
@@ -295,7 +292,8 @@ const FEED: { text: string; tone: "green" | "red" }[] = [
   { text: "Claude Code → Koupa → koupa-production · sent", tone: "green" },
   { text: "Codex → Nabdh → nabdh-development · sent", tone: "green" },
   { text: "Codex asked for koupa-production · refused, it belongs to Koupa", tone: "red" },
-  { text: "OpenCode → Nabdh → nabdh-backend · sent", tone: "green" },
+  { text: "OpenCode → Nabdh → Notion · read · sent", tone: "green" },
+  { text: "OpenCode asked Notion to edit a page · refused, writes are off", tone: "red" },
   { text: "Agent in an unknown folder · refused, not a registered project", tone: "red" },
 ];
 
@@ -530,16 +528,15 @@ const AGENT_LOGOS: Logo[] = [
   brand("Gemini", siGooglegemini),
   brand("Cursor", siCursor),
   brand("Windsurf", siWindsurf),
-  brand("Copilot", siGithubcopilot),
 ];
 
 const SERVICE_LOGOS: Logo[] = [
   brand("Supabase", siSupabase),
   brand("Stripe", siStripe),
   brand("Cloudflare", siCloudflare),
-  brand("Convex", siConvex),
+  brand("Notion", siNotion),
   brand("GitHub", siGithub),
-  brand("Clerk", siClerk),
+  brand("Sentry", siSentry),
   brand("Linear", siLinear),
   brand("Vercel", siVercel),
   brand("Figma", siFigma),
@@ -602,11 +599,11 @@ function Hero() {
             Nexus sits between your coding agents and your services. It sends each agent to its own project's account, so an agent working on one project can't touch another's.
           </p>
           <div className="cta-row">
-            <a href="#waitlist" className="btn btn-primary">Get notified <ArrowRight size={14} weight="bold" /></a>
+            <a href="#download" className="btn btn-primary">Get the alpha <ArrowRight size={14} weight="bold" /></a>
             <a href="#routing" className="btn">See how it works</a>
           </div>
           <p className="fine">
-            Made for one developer running several agents across several projects.
+            Made for one developer running several agents across several projects. Linux, macOS and Windows.
           </p>
         </div>
         <Topology />
@@ -776,15 +773,10 @@ function Problem() {
 }
 
 /* ---------- How it works: the app's real first-run setup, replayed ---------- */
-const OB_STEPS = ["Register", "Link", "Connect", "See it work"] as const;
+const OB_STEPS = ["Project", "Agent", "See it work"] as const;
 /* How many beats each step plays before the demo moves on. */
-const OB_BEATS = [3, 4, 2, 5];
-const OB_CHECKS = [
-  { step: "Project file", detail: "Agents opening this folder resolve Koupa." },
-  { step: "HTTP reachable", detail: "Nexus HTTP is answering at http://localhost:3939/mcp." },
-  { step: "Session", detail: "A session resolved for this workspace." },
-];
-
+const OB_BEATS = [3, 3, 6];
+const OB_PROMPT = "Which Nexus project am I in?";
 /* Text that types itself in. The part not typed yet stays in the layout but is
    invisible, so nothing jumps or re-wraps while it types. */
 function Typed({ text, on, instant, delay = 0 }: { text: string; on: boolean; instant: boolean; delay?: number }) {
@@ -824,8 +816,9 @@ function Typed({ text, on, instant, delay = 0 }: { text: string; on: boolean; in
 }
 
 function OnboardingDemo() {
+  const last = OB_STEPS.length - 1;
   const reduced = typeof window !== "undefined" && REDUCED();
-  const [pos, setPos] = useState({ step: reduced ? 3 : 0, beat: reduced ? OB_BEATS[3] : 0, hold: 0 });
+  const [pos, setPos] = useState({ step: reduced ? last : 0, beat: reduced ? OB_BEATS[last] : 0, hold: 0 });
   const [auto, setAuto] = useState(!reduced);
   const [inView, setInView] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -847,37 +840,37 @@ function OnboardingDemo() {
     const id = window.setInterval(() => {
       setPos((p) => {
         if (p.beat < OB_BEATS[p.step]) return { ...p, beat: p.beat + 1, hold: 0 };
-        const wait = p.step === 3 ? 7 : 2;
+        const wait = p.step === last ? 7 : 2;
         if (p.hold < wait) return { ...p, hold: p.hold + 1 };
-        return p.step === 3 ? { step: 0, beat: 0, hold: 0 } : { step: p.step + 1, beat: 0, hold: 0 };
+        return p.step === last ? { step: 0, beat: 0, hold: 0 } : { step: p.step + 1, beat: 0, hold: 0 };
       });
-    }, 850);
+    }, 900);
     return () => window.clearInterval(id);
-  }, [auto, inView]);
+  }, [auto, inView, last]);
 
-  /* Clicking takes over: show that step fully played. */
   function replay() {
     setAuto(true);
     setPos({ step: 0, beat: 0, hold: 0 });
   }
 
+  /* Clicking takes over: show that step fully played. */
   function go(next: number) {
-    const to = Math.min(OB_STEPS.length - 1, Math.max(0, next));
+    const to = Math.min(last, Math.max(0, next));
     setAuto(false);
     setPos({ step: to, beat: OB_BEATS[to], hold: 0 });
   }
 
   const done = (i: number) => step > i || (step === i && beat >= OB_BEATS[i]);
-  const summaries = ["~/Projects/Koupa", "Supabase · koupa-production", "Claude Code", "Routed"];
+  const summaries = ["~/Projects/Koupa", "Claude Code", "First call seen"];
   const registered = step > 0 || beat >= 3;
-  const linked = step > 1 || (step === 1 && beat >= 4);
-  const agentOn = step > 2 || (step === 2 && beat >= 2);
-  const lit = step === 3 && beat >= 5;
-  const checksShown = step === 3 ? Math.max(0, Math.min(3, beat - 1)) : 0;
+  const agentOn = step > 1 || (step === 1 && beat >= 2);
+  const unlocked = step === last && beat >= 1;
+  const called = step === last && beat >= 4;
+  const bound = step === last && beat >= 6;
   const claude = AGENT_LOGOS[0];
-  const line = (
+  const line = (on: boolean) => (
     <svg className="ob-conn" width="44" height="12" aria-hidden="true">
-      <line x1="0" y1="6" x2="44" y2="6" className={lit ? "ob-flow" : ""} stroke={lit ? "var(--green)" : "var(--line)"} strokeWidth="2" strokeDasharray={lit ? "6 6" : "3 4"} />
+      <line x1="0" y1="6" x2="44" y2="6" className={on ? "ob-flow" : ""} stroke={on ? "var(--green)" : "var(--line)"} strokeWidth="2" strokeDasharray={on ? "6 6" : "3 4"} />
     </svg>
   );
 
@@ -886,7 +879,7 @@ function OnboardingDemo() {
       <div className="ob-bar">
         <img src="/nexus-symbol.png" alt="" className="ob-logo" />
         <strong>Set up Nexus</strong>
-        <span className="muted">Step {step + 1} of 4</span>
+        <span className="muted">Step {step + 1} of {OB_STEPS.length}</span>
         <span className="ob-example label">Example</span>
       </div>
 
@@ -907,8 +900,8 @@ function OnboardingDemo() {
           <div className="ob-content" key={step}>
             {step === 0 && (
               <>
-                <h3>Register a project</h3>
-                <p>A project is a folder you work in. Nexus uses it to know which resources an agent may reach. Nothing secret is stored.</p>
+                <h3>Pick the folder your agent works in</h3>
+                <p>Nexus ties your agent to this project, so it can only reach what belongs to it. Nothing secret is stored.</p>
                 <div className="ob-field"><span>Project folder</span><div className="ob-input mono"><Typed text="~/Projects/Koupa" on={beat >= 1} instant={instant} /></div></div>
                 <div className="ob-field"><span>Project name</span><div className="ob-input"><Typed text="Koupa" on={beat >= 2} instant={instant} /></div></div>
                 <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 3 ? "pressed" : ""}`}>{beat >= 3 ? "Continue" : "Register project"}</span></div>
@@ -916,64 +909,47 @@ function OnboardingDemo() {
             )}
             {step === 1 && (
               <>
-                <h3>Link a service</h3>
-                <p>Link one login, then bind the exact resource this project uses. Nexus refuses anything else.</p>
-                <div className="ob-box">
-                  <span className="label">1 · Link a login</span>
-                  <div className="ob-row">
-                    <div className="ob-field tight"><span>Service</span><div className="ob-input"><Typed text="Supabase" on={beat >= 1} instant={instant} /></div></div>
-                    <div className="ob-field tight"><span>Account label</span><div className="ob-input"><Typed text="personal" on={beat >= 1} instant={instant} delay={260} /></div></div>
-                    <span aria-hidden="true" className={`ob-btn ${beat >= 2 ? "pressed" : ""}`}>Link login</span>
-                  </div>
-                  {beat >= 2 && <span className="badge ob-pop"><Typed text="Supabase · personal" on instant={instant} /></span>}
-                </div>
-                <div className="ob-box">
-                  <span className="label">2 · Bind a resource</span>
-                  <div className="ob-row">
-                    <span aria-hidden="true" className={`ob-btn ${beat >= 3 ? "pressed" : ""}`}>+ Add a binding</span>
-                    <span className="ob-help">Opens the same dialog as Bindings, including browser approval for Supabase.</span>
-                  </div>
-                  {beat >= 4 && <div className="ob-bound ob-pop"><Check size={14} weight="bold" /><b>Supabase</b><code><Typed text="koupa-production" on instant={instant} /></code></div>}
-                </div>
-              </>
-            )}
-            {step === 2 && (
-              <>
-                <h3>Connect an agent</h3>
-                <p>Point one coding agent at Nexus instead of the provider. These are the agents found on this machine.</p>
+                <h3>Connect your agent</h3>
+                <p>Found on this machine. Pick the one you use.</p>
                 <div className="ob-chips" aria-hidden="true">
                   {["Claude Code", "Codex", "OpenCode"].map((n) => (
                     <span key={n} className={`ob-chip ${beat >= 1 && n === "Claude Code" ? "on" : ""}`}>{n}</span>
                   ))}
                 </div>
-                <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 2 ? "pressed" : ""}`}>{beat >= 1 ? "Connect Claude Code" : "Pick an agent"}</span><span className="ob-help">Runs its own command or writes the config for you, with a diff and a backup.</span></div>
+                <div className="ob-actions">
+                  <span aria-hidden="true" className={`ob-btn ${beat >= 2 ? "pressed" : ""}`}>{beat >= 1 ? "Connect Claude Code" : "Pick an agent"}</span>
+                  <span className="ob-help">Adds one Nexus entry to <code>.mcp.json</code> in your project. Your other servers are kept and a backup is saved first.</span>
+                </div>
+                {beat >= 3 && <div className="ob-bound ob-pop"><Check size={14} weight="bold" /><b>Wrote</b><code><Typed text="~/Projects/Koupa/.mcp.json" on instant={instant} /></code></div>}
               </>
             )}
-            {step === 3 && (
+            {step === 2 && (
               <>
-                <h3>See it work</h3>
-                <p>Nexus routes one harmless check the way an agent call would go: Claude Code, then Koupa, then its service.</p>
-                <div className="ob-actions"><span aria-hidden="true" className={`ob-btn ${beat >= 1 ? "pressed" : ""}`}>{beat === 1 ? "Routing..." : beat >= 2 ? "Run it again" : "Run a test call"}</span></div>
-                {checksShown > 0 && (
-                  <ul className="ob-checks">
-                    {OB_CHECKS.slice(0, checksShown).map((c) => (
-                      <li key={c.step} className="ob-pop"><span className="nx-check done sm"><Check size={11} weight="bold" /></span><span><b>{c.step}</b><small><Typed text={c.detail} on instant={instant} /></small></span></li>
-                    ))}
-                  </ul>
-                )}
-                {lit && (
+                <h3>See your agent reach Nexus</h3>
+                <p>Nexus starts locked and refuses every agent call until you unlock it. Then restart Claude Code in the project, say yes when it asks to trust the "nexus" server, and send it one message.</p>
+                <div className="ob-box">
+                  <span className="label">Vault password</span>
+                  <div className="ob-row">
+                    <div className="ob-input mono ob-grow"><Typed text="••••••••••••••" on={beat >= 1} instant={instant} /></div>
+                    <span aria-hidden="true" className={`ob-btn ${unlocked ? "pressed" : ""}`}>{unlocked ? "Unlocked" : "Unlock Nexus"}</span>
+                  </div>
+                </div>
+                {beat >= 2 && <div className="ob-note ob-pop mono"><Typed text={OB_PROMPT} on instant={instant} /></div>}
+                {beat >= 3 && !called && <div className="ob-note ob-pop">Waiting for Claude Code's first call. This updates by itself.</div>}
+                {called && (
                   <>
-                    <div className="ob-note ok ob-pop"><Typed text="Routed. The call resolved to koupa-production in your personal Supabase." on instant={instant} /></div>
-                    <div className="ob-note ob-pop"><Typed text="Without Nexus, an agent in Koupa could have reached Nabdh's resources. Here that call is refused before it leaves your machine." on instant={instant} delay={1250} /></div>
+                    <div className="ob-note ok ob-pop"><Typed text="Claude Code called Nexus just now: nexus_context · allowed." on instant={instant} /></div>
+                    {beat >= 5 && <div className="ob-note ob-pop"><Typed text="Without Nexus, an agent in Koupa could have reached Nabdh's resources. Here that call is refused before it leaves your machine." on instant={instant} /></div>}
                   </>
                 )}
+                {bound && <div className="ob-bound ob-pop"><Check size={14} weight="bold" /><b>Optional · bound Supabase</b><code>koupa-production</code></div>}
               </>
             )}
           </div>
 
           <div className="ob-nav">
             <button type="button" className="ob-link" disabled={step === 0} onClick={() => go(step - 1)}>Back</button>
-            {step < 3 ? <button type="button" className="btn btn-primary ob-next" onClick={() => go(step + 1)}>Continue</button> : <button type="button" className="btn ob-next" onClick={replay}>Replay</button>}
+            {step < last ? <button type="button" className="btn btn-primary ob-next" onClick={() => go(step + 1)}>Continue</button> : <button type="button" className="btn ob-next" onClick={replay}>Replay</button>}
           </div>
         </div>
 
@@ -987,21 +963,21 @@ function OnboardingDemo() {
                 {agentOn && (
                   <>
                     <div className="ob-node ob-pop">
-                      <span className="ob-tile" style={{ background: lit ? "var(--green-bg)" : "var(--raised)" }}>
+                      <span className="ob-tile" style={{ background: called ? "var(--green-bg)" : "var(--raised)" }}>
                         <svg viewBox="0 0 24 24" style={{ width: 16, height: 16, fill: claude.color ?? "currentColor" }}><path d={claude.path} /></svg>
                       </span>
                       <span><b>Claude Code</b><small>Agent</small></span>
                     </div>
-                    {line}
+                    {line(called)}
                   </>
                 )}
                 <div className="ob-node ob-pop">
                   <span className="ob-tile" style={{ background: "var(--raised)" }}><FolderSimple size={16} weight="bold" /></span>
                   <span><b>Koupa</b><small>production</small></span>
                 </div>
-                {linked && (
+                {bound && (
                   <>
-                    {line}
+                    {line(true)}
                     <div className="ob-node ob-pop">
                       <ServiceLogo name="Supabase" size={30} />
                       <span><b>Supabase</b><small className="mono">koupa-production</small></span>
@@ -1010,14 +986,14 @@ function OnboardingDemo() {
                 )}
               </div>
             )}
-            {lit && (
+            {called && beat >= 5 && (
               <div className="ob-node ob-refused ob-pop">
                 <span className="ob-tile" style={{ background: "var(--red-bg)" }}><FolderSimple size={16} weight="bold" /></span>
                 <span><b>Nabdh · nabdh-development</b><small>Refused: another project</small></span>
               </div>
             )}
           </div>
-          <p className="ob-foot">Step 1 adds the project, step 2 the service, step 3 the agent. In step 4 the lines light up.</p>
+          <p className="ob-foot">Step 1 adds the project, step 2 the agent. In step 3 the line lights up only when your agent really calls Nexus.</p>
         </div>
       </div>
     </div>
@@ -1029,8 +1005,8 @@ function HowItWorks() {
     <section className="section" id="how">
       <div className="container">
         <div className="section-head stack">
-          <h2>Four steps from nothing to a routed call.</h2>
-          <p className="lead">This is the app's own first-run setup. Watch it play, or click through the steps.</p>
+          <h2>Three steps to your agent's first call through Nexus.</h2>
+          <p className="lead">This is the app's own first-run setup. It only counts as done when your agent really calls Nexus, not when the setup looks right.</p>
         </div>
         <OnboardingDemo />
       </div>
@@ -1055,11 +1031,12 @@ type Scenario = {
   response: string;
 };
 
+/* Requests and answers use the real tool names, with the payloads trimmed. */
 const SCENARIOS: Scenario[] = [
   {
     id: "ok",
     title: "Right project",
-    blurb: "Claude Code in the Koupa folder asks for Supabase.",
+    blurb: "Claude Code in the Koupa folder reads its Supabase tables.",
     tone: "green",
     badge: "Sent",
     nodes: [
@@ -1071,23 +1048,23 @@ const SCENARIOS: Scenario[] = [
     outcome: "Sent to koupa-production",
     why: "The agent only named the service. Nexus found Koupa's own account and resource and made the call. The key never reached the agent.",
     request: `{
-  "method": "nexus.request_access",
-  "params": { "service": "supabase" }
+  "tool": "nexus_execute",
+  "arguments": {
+    "provider": "supabase",
+    "operation": "list_tables"
+  }
 }`,
     response: `{
-  "result": {
-    "project": "koupa",
-    "account": "Personal",
-    "resource": "koupa-production",
-    "sent": true,
-    "key_shown_to_agent": false
-  }
+  "decision": "allow",
+  "project": "koupa",
+  "resource": "koupa-production",
+  "result": { "tables": ["orders", "users"] }
 }`,
   },
   {
     id: "cross",
     title: "Wrong project",
-    blurb: "Codex in the Nabdh folder asks for Koupa's database.",
+    blurb: "Codex in the Nabdh folder names Koupa's database.",
     tone: "red",
     badge: "Refused",
     nodes: [
@@ -1099,18 +1076,42 @@ const SCENARIOS: Scenario[] = [
     outcome: "Refused before it reached Supabase",
     why: "koupa-production belongs to Koupa, and this agent is in Nabdh. Nexus says no right away.",
     request: `{
-  "method": "nexus.execute",
-  "params": {
-    "service": "supabase",
-    "resource": "koupa-production"
+  "tool": "nexus_execute",
+  "arguments": {
+    "provider": "supabase",
+    "operation": "execute_sql",
+    "arguments": { "project_id": "koupa-production" }
   }
 }`,
     response: `{
-  "error": {
-    "message": "Refused",
-    "reason": "That resource belongs to Koupa",
-    "this_project": "nabdh"
+  "decision": "block",
+  "reason": "That target does not belong to this project."
+}`,
+  },
+  {
+    id: "write",
+    title: "A change it can't make",
+    blurb: "OpenCode in Nabdh asks Notion to edit a page.",
+    tone: "red",
+    badge: "Refused",
+    nodes: [
+      { label: "Agent", name: "OpenCode", sub: "Nabdh folder", s: "ok" },
+      { label: "Project", name: "Nabdh", sub: "development", s: "ok" },
+      { label: "Account", name: "Personal", sub: "Notion", s: "ok" },
+      { label: "Action", name: "Edit a page", sub: "not marked read-only", s: "fail" },
+    ],
+    outcome: "Refused, nothing was changed",
+    why: "Nexus passes only actions the service itself marks read-only. Edits stay refused unless you turn on safe writes for this one binding, and never for production.",
+    request: `{
+  "tool": "nexus_execute",
+  "arguments": {
+    "provider": "notion",
+    "operation": "notion-update-page"
   }
+}`,
+    response: `{
+  "decision": "approval_required",
+  "reason": "This changes data and writes are off for this binding. It was not run."
 }`,
   },
   {
@@ -1128,42 +1129,35 @@ const SCENARIOS: Scenario[] = [
     outcome: "Refused, nothing was guessed",
     why: "Only you can add a project. Nexus never creates one on its own or guesses.",
     request: `{
-  "method": "nexus.request_access",
-  "params": { "service": "supabase" }
+  "tool": "nexus_context",
+  "arguments": {}
 }`,
     response: `{
-  "error": {
-    "message": "Refused",
-    "reason": "This folder isn't a registered project",
-    "hint": "Add it in Nexus first"
-  }
+  "status": "unresolved",
+  "reason": "This workspace has no readable Nexus project file."
 }`,
   },
   {
     id: "conflict",
     title: "Mixed signals",
-    blurb: "The project file says Koupa, but the Git remote says Nabdh.",
+    blurb: "The project file says Koupa, but the Git remote points somewhere else.",
     tone: "amber",
     badge: "Asks you",
     nodes: [
       { label: "Agent", name: "Claude Code", sub: "~/Projects/app", s: "ok" },
-      { label: "Project", name: "Koupa or Nabdh?", sub: "the clues disagree", s: "warn" },
+      { label: "Project", name: "Koupa?", sub: "the clues disagree", s: "warn" },
       { label: "Account", name: "Account", sub: "", s: "ok" },
       { label: "Resource", name: "Resource", sub: "", s: "ok" },
     ],
-    outcome: "Waiting for you to decide",
-    why: "When the clues disagree, Nexus asks you instead of guessing. Nothing is sent until you decide.",
+    outcome: "Nothing sent until you decide",
+    why: "When the clues disagree, Nexus stops and shows you why instead of guessing.",
     request: `{
-  "method": "nexus.context",
-  "params": {}
+  "tool": "nexus_context",
+  "arguments": {}
 }`,
     response: `{
-  "result": {
-    "status": "conflict",
-    "project_file_says": "koupa",
-    "git_remote_says": "nabdh",
-    "sent": false
-  }
+  "status": "unresolved",
+  "reason": "The Git remote does not match this project's registered repo."
 }`,
   },
 ];
@@ -1310,7 +1304,7 @@ function Routing() {
                 <pre className="code"><code>{s.request}</code></pre>
               </div>
               <div>
-                <span className="label">Nexus answers</span>
+                <span className="label">Nexus answers (trimmed)</span>
                 <pre className="code"><code>{s.response}</code></pre>
               </div>
             </div>
@@ -1323,116 +1317,87 @@ function Routing() {
   );
 }
 
-/* ---------- Service catalog (paper §13, proposed list) ---------- */
-type Tier = "Native" | "Curated";
-type Svc = { name: string; cats: string[]; tier?: Tier };
+/* ---------- Services: mirrors mcp/services.json plus the two built-ins ---------- */
+/* Built-in: Nexus's own Supabase and GitHub support. Sign-in: the service's own
+   MCP server, signed in through the browser. Keep this list in step with
+   mcp/services.json (names, and which ones can be limited to one resource). */
+type Tier = "Built-in" | "Sign-in";
+type Svc = {
+  name: string;
+  cats: string[];
+  tier: Tier;
+  /* What one binding can be limited to, when the service supports it. */
+  limit?: string;
+  /* The provider only accepts MCP clients it has approved, and Nexus isn't yet. */
+  waiting?: boolean;
+  /* Signed in and used through Nexus for real, not only built. */
+  tested?: boolean;
+};
 
 const CATS = [
-  "Database & backend", "Auth & identity", "Source control & CI", "Hosting & deployment",
-  "Monitoring & analytics", "Payments", "Email & messaging", "Project management",
-  "Docs & knowledge", "Team communication", "Design", "AI & generation",
-  "Search, media & vectors", "Content management",
+  "Database & backend", "Source control", "Hosting & deployment", "Monitoring & analytics",
+  "Payments", "Email", "Project management", "Docs & knowledge", "Design", "AI",
+  "Media", "Content & sites", "Automation",
 ] as const;
 
-const [DB, AUTH, SCM, HOST, MON, PAY, MAIL, PM, DOCS, CHAT, DESIGN, AI, SEARCH, CMS] = CATS;
+const [DB, SCM, HOST, MON, PAY, MAIL, PM, DOCS, DESIGN, AI, MEDIA, CMS, AUTO] = CATS;
 
 const CATALOG: Svc[] = [
-  { name: "Supabase", cats: [DB, AUTH], tier: "Native" },
-  { name: "Firebase", cats: [DB, AUTH, HOST] },
-  { name: "Convex", cats: [DB] },
-  { name: "Neon", cats: [DB] },
-  { name: "PlanetScale", cats: [DB] },
-  { name: "Turso", cats: [DB] },
-  { name: "MongoDB Atlas", cats: [DB] },
-  { name: "Upstash", cats: [DB] },
-  { name: "Clerk", cats: [AUTH] },
-  { name: "Auth0", cats: [AUTH] },
-  { name: "GitHub", cats: [SCM], tier: "Native" },
-  { name: "GitLab", cats: [SCM] },
-  { name: "Vercel", cats: [HOST] },
-  { name: "Netlify", cats: [HOST] },
-  { name: "Cloudflare", cats: [HOST] },
-  { name: "Railway", cats: [HOST] },
-  { name: "Render", cats: [HOST] },
-  { name: "Fly.io", cats: [HOST] },
-  { name: "DigitalOcean", cats: [HOST] },
-  { name: "Sentry", cats: [MON] },
-  { name: "PostHog", cats: [MON] },
-  { name: "Datadog", cats: [MON] },
-  { name: "Grafana", cats: [MON] },
-  { name: "Mixpanel", cats: [MON] },
-  { name: "Stripe", cats: [PAY] },
-  { name: "Paddle", cats: [PAY] },
-  { name: "Lemon Squeezy", cats: [PAY] },
-  { name: "PayPal", cats: [PAY] },
-  { name: "Resend", cats: [MAIL] },
-  { name: "SendGrid", cats: [MAIL] },
-  { name: "Twilio", cats: [MAIL] },
-  { name: "Postmark", cats: [MAIL] },
-  { name: "Linear", cats: [PM] },
-  { name: "Jira", cats: [PM] },
-  { name: "Asana", cats: [PM] },
-  { name: "Notion", cats: [DOCS, DB] },
-  { name: "Confluence", cats: [DOCS] },
-  { name: "Google Drive", cats: [DOCS] },
-  { name: "Slack", cats: [CHAT] },
-  { name: "Discord", cats: [CHAT] },
-  { name: "Figma", cats: [DESIGN] },
-  { name: "OpenAI", cats: [AI] },
-  { name: "Replicate", cats: [AI] },
-  { name: "ElevenLabs", cats: [AI] },
-  { name: "Hugging Face", cats: [AI] },
-  { name: "Higgsfield", cats: [AI] },
-  { name: "Algolia", cats: [SEARCH] },
-  { name: "Cloudinary", cats: [SEARCH] },
-  { name: "Pinecone", cats: [SEARCH, DB] },
-  { name: "Sanity", cats: [CMS] },
+  { name: "Supabase", cats: [DB], tier: "Built-in", limit: "project", tested: true },
+  { name: "GitHub", cats: [SCM], tier: "Built-in", limit: "repository", tested: true },
+  { name: "Notion", cats: [DOCS], tier: "Sign-in", tested: true },
+  { name: "Neon", cats: [DB], tier: "Sign-in", limit: "project" },
+  { name: "PlanetScale", cats: [DB], tier: "Sign-in" },
+  { name: "Airtable", cats: [DB], tier: "Sign-in", limit: "base" },
+  { name: "GitLab", cats: [SCM], tier: "Sign-in", limit: "project" },
+  { name: "Vercel", cats: [HOST], tier: "Sign-in", limit: "project", waiting: true },
+  { name: "Cloudflare", cats: [HOST], tier: "Sign-in", limit: "account" },
+  { name: "Netlify", cats: [HOST], tier: "Sign-in", limit: "site" },
+  { name: "Railway", cats: [HOST], tier: "Sign-in", limit: "project" },
+  { name: "Sentry", cats: [MON], tier: "Sign-in", limit: "project" },
+  { name: "PostHog", cats: [MON], tier: "Sign-in" },
+  { name: "Mixpanel", cats: [MON], tier: "Sign-in" },
+  { name: "Stripe", cats: [PAY], tier: "Sign-in" },
+  { name: "PayPal", cats: [PAY], tier: "Sign-in" },
+  { name: "Resend", cats: [MAIL], tier: "Sign-in" },
+  { name: "Linear", cats: [PM], tier: "Sign-in" },
+  { name: "Jira", cats: [PM], tier: "Sign-in" },
+  { name: "Confluence", cats: [DOCS], tier: "Sign-in" },
+  { name: "Figma", cats: [DESIGN], tier: "Sign-in", waiting: true },
+  { name: "Hugging Face", cats: [AI], tier: "Sign-in" },
+  { name: "Cloudinary", cats: [MEDIA], tier: "Sign-in" },
+  { name: "Webflow", cats: [CMS], tier: "Sign-in", limit: "site" },
+  { name: "Sanity", cats: [CMS], tier: "Sign-in", limit: "project" },
+  { name: "Zapier", cats: [AUTO], tier: "Sign-in" },
 ];
 
 const SERVICE_ICON: Record<string, Logo> = {
   "Supabase": brand("Supabase", siSupabase),
-  "Firebase": brand("Firebase", siFirebase),
-  "Convex": brand("Convex", siConvex),
+  "GitHub": brand("GitHub", siGithub),
+  "Notion": brand("Notion", siNotion),
   "Neon": brand("Neon", siNeon),
   "PlanetScale": brand("PlanetScale", siPlanetscale),
-  "Turso": brand("Turso", siTurso),
-  "MongoDB Atlas": brand("MongoDB Atlas", siMongodb),
-  "Upstash": brand("Upstash", siUpstash),
-  "Clerk": brand("Clerk", siClerk),
-  "Auth0": brand("Auth0", siAuth0),
-  "GitHub": brand("GitHub", siGithub),
+  "Airtable": brand("Airtable", siAirtable),
   "GitLab": brand("GitLab", siGitlab),
   "Vercel": brand("Vercel", siVercel),
-  "Netlify": brand("Netlify", siNetlify),
   "Cloudflare": brand("Cloudflare", siCloudflare),
+  "Netlify": brand("Netlify", siNetlify),
   "Railway": brand("Railway", siRailway),
-  "Render": brand("Render", siRender),
-  "Fly.io": brand("Fly.io", siFlydotio),
-  "DigitalOcean": brand("DigitalOcean", siDigitalocean),
   "Sentry": brand("Sentry", siSentry),
   "PostHog": brand("PostHog", siPosthog),
-  "Datadog": brand("Datadog", siDatadog),
-  "Grafana": brand("Grafana", siGrafana),
   "Mixpanel": brand("Mixpanel", siMixpanel),
   "Stripe": brand("Stripe", siStripe),
-  "Paddle": brand("Paddle", siPaddle),
-  "Lemon Squeezy": brand("Lemon Squeezy", siLemonsqueezy),
   "PayPal": brand("PayPal", siPaypal),
   "Resend": brand("Resend", siResend),
   "Linear": brand("Linear", siLinear),
   "Jira": brand("Jira", siJira),
-  "Asana": brand("Asana", siAsana),
-  "Notion": brand("Notion", siNotion),
   "Confluence": brand("Confluence", siConfluence),
-  "Google Drive": brand("Google Drive", siGoogledrive),
-  "Discord": brand("Discord", siDiscord),
   "Figma": brand("Figma", siFigma),
-  "Replicate": brand("Replicate", siReplicate),
-  "ElevenLabs": brand("ElevenLabs", siElevenlabs),
   "Hugging Face": brand("Hugging Face", siHuggingface),
-  "Algolia": brand("Algolia", siAlgolia),
   "Cloudinary": brand("Cloudinary", siCloudinary),
+  "Webflow": brand("Webflow", siWebflow),
   "Sanity": brand("Sanity", siSanity),
+  "Zapier": brand("Zapier", siZapier),
 };
 
 /* Logo tile for a service. A few services have no mark in the icon set, so
@@ -1464,7 +1429,6 @@ function ServiceLogo({ name, size = 40 }: { name: string; size?: number }) {
 /* Plausible resource names per category, so the demo reads like a real project. */
 const RESOURCES: Record<string, [string, string]> = {
   [DB]: ["koupa-production", "nabdh-development"],
-  [AUTH]: ["koupa-auth", "nabdh-auth"],
   [SCM]: ["koupa", "nabdh"],
   [HOST]: ["koupa-web", "nabdh-web"],
   [MON]: ["koupa", "nabdh"],
@@ -1472,11 +1436,11 @@ const RESOURCES: Record<string, [string, string]> = {
   [MAIL]: ["koupa-mail", "nabdh-mail"],
   [PM]: ["Koupa board", "Nabdh board"],
   [DOCS]: ["Koupa wiki", "Nabdh wiki"],
-  [CHAT]: ["#koupa", "#nabdh"],
   [DESIGN]: ["Koupa app", "Nabdh app"],
-  [AI]: ["koupa-key", "nabdh-key"],
-  [SEARCH]: ["koupa-index", "nabdh-index"],
-  [CMS]: ["koupa-studio", "nabdh-studio"],
+  [AI]: ["koupa-models", "nabdh-models"],
+  [MEDIA]: ["koupa-media", "nabdh-media"],
+  [CMS]: ["koupa-site", "nabdh-site"],
+  [AUTO]: ["Koupa zaps", "Nabdh zaps"],
 };
 
 /* The stage: one service, linked as two accounts, each bound to its own project. */
@@ -1542,14 +1506,15 @@ function Catalog() {
 
   const svc = CATALOG.find((c) => c.name === sel)!;
   const needle = q.trim().toLowerCase();
-  const builtIn = svc.tier === "Native";
+  const builtIn = svc.tier === "Built-in";
+  const signIn = CATALOG.filter((c) => c.tier === "Sign-in").length;
 
   return (
     <section className="section" id="services">
       <div className="container">
         <div className="section-head stack">
           <h2>Link a service once. Use it in every project.</h2>
-          <p className="lead">50 popular services to start. Pick one to see how Nexus links it.</p>
+          <p className="lead">Supabase and GitHub built in, {signIn} more through their own sign-in, and any other service with an MCP address. Pick one to see how Nexus links it.</p>
         </div>
 
         <div className="link-demo">
@@ -1581,9 +1546,9 @@ function Catalog() {
               ))}
             </div>
             <div className="dock-legend">
-              <span><b className="badge green">Built-in</b>Supabase and GitHub, reviewed action by action.</span>
-              <span><b className="badge">Catalog</b>The other 48, through each service's MCP server.</span>
-              <span><b className="badge amber">Your own</b>Add anything else.</span>
+              <span><b className="badge green">Built-in</b>Supabase and GitHub. Each binding is held to one project or one repository.</span>
+              <span><b className="badge">Sign-in</b>The service's own MCP server. Sign in once in your browser; the login goes to your computer's keychain.</span>
+              <span><b className="badge amber">Your own</b>Any other service: give it a name and its public MCP address.</span>
             </div>
           </div>
 
@@ -1594,19 +1559,26 @@ function Catalog() {
                 <h3>{svc.name}</h3>
                 <p>{svc.cats.join(", ")}</p>
               </div>
-              <span className={`badge ${builtIn ? "green" : ""}`}>{builtIn ? "Built-in" : "Catalog"}</span>
+              <span className={`badge ${builtIn ? "green" : svc.waiting ? "amber" : ""}`}>{svc.waiting ? "Waiting on provider" : svc.tier}</span>
             </div>
             <div className="link-body" key={`${svc.name}-svg`}>
               <LinkStage svc={svc} />
             </div>
             <p className="link-note">
-              Link each account once, with a label. Every project then picks its own account and resource.
+              Link each account once, with a label. Every project then picks its own account.
               {builtIn
-                ? " Nexus pins every call to that project's resource."
-                : " Nexus keeps the right account. Use one account per project for this one."}
+                ? ` Nexus holds every call to that project's ${svc.limit}.`
+                : svc.limit
+                  ? ` A binding can be limited to one ${svc.limit}; Nexus refuses calls that name another.`
+                  : " Nexus keeps the right account, but can't tell resources apart inside it. Use one account per project for this one."}
+              {!builtIn && " Only actions the service marks read-only go through, unless you allow safe writes for that binding."}
+              {svc.waiting && ` ${svc.name} only accepts MCP apps it has approved, and Nexus isn't approved yet.`}
             </p>
           </div>
         </div>
+        <p className="fine">
+          Signed in and used through Nexus so far: Supabase, GitHub and Notion. The other sign-in services use the same engine but haven't all been tried live yet.
+        </p>
       </div>
     </section>
   );
@@ -1626,12 +1598,14 @@ const AGENT_DEMOS: AgentDemo[] = [
     id: "claude",
     name: "Claude Code",
     logo: AGENT_LOGOS[0],
-    how: "One command",
+    how: "Tested end to end",
     lines: [
-      { k: "cmd", t: "$ claude mcp add --transport http nexus http://localhost:3939/mcp" },
-      { k: "dim", t: "Testing the connection..." },
+      { k: "dim", t: "Connect Claude Code: Nexus adds one entry to .mcp.json" },
+      { k: "add", t: "+ nexus  http://127.0.0.1:3939/mcp" },
+      { k: "dim", t: "Your other servers are kept. A backup is saved first." },
+      { k: "cmd", t: "$ claude   (restarted in ~/Projects/Koupa)" },
+      { k: "warn", t: "Trust the \"nexus\" server from .mcp.json? Yes" },
       { k: "ok", t: "Connected", set: { agent: { v: "Claude Code", tone: "ok" }, connection: { v: "Connected", tone: "ok" } } },
-      { k: "dim", t: "Asking which folder it was started in..." },
       { k: "ok", t: "Folder reported: ~/Projects/Koupa", set: { folder: { v: "Reported by the agent", tone: "ok" } } },
       { k: "ok", t: "Project: Koupa", set: { project: { v: "Koupa", tone: "ok" } } },
     ],
@@ -1640,14 +1614,14 @@ const AGENT_DEMOS: AgentDemo[] = [
     id: "codex",
     name: "Codex",
     logo: AGENT_LOGOS[1],
-    how: "One command",
+    how: "Config written for you",
     lines: [
-      { k: "cmd", t: "$ codex mcp add --url http://localhost:3939/mcp nexus" },
-      { k: "dim", t: "Testing the connection..." },
-      { k: "ok", t: "Connected", set: { agent: { v: "Codex", tone: "ok" }, connection: { v: "Connected", tone: "ok" } } },
+      { k: "dim", t: "Connect Codex: Nexus adds one entry to .codex/config.toml" },
+      { k: "add", t: "+ [mcp_servers.nexus]  url = \"http://127.0.0.1:3939/mcp?workspace=…\"" },
       { k: "warn", t: "Codex doesn't report its folder", set: { folder: { v: "Not reported", tone: "warn" } } },
-      { k: "dim", t: "Pinning the folder in the project's Codex config..." },
-      { k: "ok", t: "Folder pinned: ~/Projects/Koupa", set: { folder: { v: "Pinned in config", tone: "ok" } } },
+      { k: "ok", t: "So the folder is pinned in that config", set: { folder: { v: "Pinned in config", tone: "ok" } } },
+      { k: "cmd", t: "$ codex   (started in ~/Projects/Koupa)" },
+      { k: "ok", t: "Connected", set: { agent: { v: "Codex", tone: "ok" }, connection: { v: "Connected", tone: "ok" } } },
       { k: "ok", t: "Project: Koupa", set: { project: { v: "Koupa", tone: "ok" } } },
     ],
   },
@@ -1655,13 +1629,12 @@ const AGENT_DEMOS: AgentDemo[] = [
     id: "opencode",
     name: "OpenCode",
     logo: AGENT_LOGOS[2],
-    how: "Config edit",
+    how: "Config written for you",
     lines: [
-      { k: "dim", t: "Preview of the change to the agent's config:" },
-      { k: "add", t: "+ nexus  http://localhost:3939/mcp" },
-      { k: "dim", t: "A backup is saved before anything is written." },
-      { k: "ok", t: "You confirmed. Config updated." },
-      { k: "dim", t: "Testing the connection..." },
+      { k: "dim", t: "Connect OpenCode: Nexus adds one entry to opencode.json" },
+      { k: "add", t: "+ nexus  http://127.0.0.1:3939/mcp" },
+      { k: "dim", t: "Your other servers are kept. A backup is saved first." },
+      { k: "cmd", t: "$ opencode   (started in ~/Projects/Koupa)" },
       { k: "ok", t: "Connected", set: { agent: { v: "OpenCode", tone: "ok" }, connection: { v: "Connected", tone: "ok" } } },
       { k: "ok", t: "Folder reported: ~/Projects/Koupa", set: { folder: { v: "Reported by the agent", tone: "ok" } } },
       { k: "ok", t: "Project: Koupa", set: { project: { v: "Koupa", tone: "ok" } } },
@@ -1709,7 +1682,7 @@ function Agents() {
       <div className="container">
         <div className="section-head stack">
           <h2>One Nexus on your computer. Every agent connects to it.</h2>
-          <p className="lead">Pick an agent to see how it connects.</p>
+          <p className="lead">One click in the app writes the agent's config in your project. Pick an agent to see what happens.</p>
         </div>
 
         <div className="agent-tabs" role="group" aria-label="Agents">
@@ -1764,6 +1737,7 @@ function Agents() {
             <p>Nexus finds them and offers to move them over, with a diff and a backup first. Anything it can't handle is listed as "found, not managed".</p>
           </div>
         </div>
+        <p className="fine">Claude Code has been run end to end through Nexus. Codex and OpenCode connect the same way, but haven't had a full real session yet. Gemini CLI, Cursor and Windsurf are detected, but connecting them is still manual and untested.</p>
       </div>
     </section>
   );
@@ -1785,7 +1759,7 @@ function MiniMap() {
       {services.map((y, i) => <rect key={`sr${i}`} className="t-card" x="290" y={y - 12} width="66" height="24" rx="8" />)}
       <text className="t-sub" x="14" y="31">Claude</text><text className="t-sub" x="14" y="78">Codex</text><text className="t-sub" x="14" y="125">OpenCode</text>
       <text className="t-name" x="162" y="54" style={{ fontSize: 11 }}>Koupa</text><text className="t-name" x="162" y="106" style={{ fontSize: 11 }}>Nabdh</text>
-      <text className="t-sub" x="300" y="25">Supabase</text><text className="t-sub" x="300" y="61">GitHub</text><text className="t-sub" x="300" y="97">Supabase</text><text className="t-sub" x="300" y="133">Convex</text>
+      <text className="t-sub" x="300" y="25">Supabase</text><text className="t-sub" x="300" y="61">GitHub</text><text className="t-sub" x="300" y="97">Supabase</text><text className="t-sub" x="300" y="133">Notion</text>
     </svg>
   );
 }
@@ -1806,7 +1780,7 @@ function Inside() {
           </article>
 
           <article className="card tile t-proj">
-            <header><span className="tint tint-blue"><FolderSimple size={20} weight="bold" /></span><div><h3>Add a project</h3><p>Pick a folder. Nexus remembers which project it is.</p></div></header>
+            <header><span className="tint tint-blue"><FolderSimple size={20} weight="bold" /></span><div><h3>Add a project</h3><p>Pick a folder. Nexus remembers which project it is and keeps a secret-free file in it.</p></div></header>
             <div className="mini-row">
               <code>~/Projects/Koupa</code>
               <span className="mini-arrow" aria-hidden="true">→</span>
@@ -1815,7 +1789,7 @@ function Inside() {
           </article>
 
           <article className="card tile t-acct">
-            <header><span className="tint tint-violet"><LinkSimple size={20} weight="bold" /></span><div><h3>Link accounts once</h3><p>Sign in once, with a label like Personal or Client.</p></div></header>
+            <header><span className="tint tint-violet"><LinkSimple size={20} weight="bold" /></span><div><h3>Link accounts once</h3><p>Sign in once in your browser, with a label like Personal or Client. The login stays in your computer's keychain.</p></div></header>
             <div className="mini-chips">
               <span className="mini-chip"><ServiceLogo name="Supabase" size={22} />Personal</span>
               <span className="mini-chip"><ServiceLogo name="Supabase" size={22} />Client</span>
@@ -1824,11 +1798,11 @@ function Inside() {
           </article>
 
           <article className="card tile t-pick">
-            <header><span className="tint tint-amber"><ListChecks size={20} weight="bold" /></span><div><h3>Pick, never type</h3><p>Choose each project's resource from a list fetched live.</p></div></header>
+            <header><span className="tint tint-amber"><ListChecks size={20} weight="bold" /></span><div><h3>Read-only by default</h3><p>Only actions a service marks read-only go through. Allow safe writes per binding, never in production.</p></div></header>
             <ul className="mini-list">
-              <li className="sel"><Check size={14} weight="bold" /> koupa-production</li>
-              <li>koupa-staging</li>
-              <li>koupa-test</li>
+              <li className="sel"><Check size={14} weight="bold" /> Read pages and tables</li>
+              <li className="sel"><Check size={14} weight="bold" /> List issues and projects</li>
+              <li><X size={14} weight="bold" /> Edit or delete: off</li>
             </ul>
           </article>
 
@@ -1855,7 +1829,7 @@ function Inside() {
             </div>
           </article>
         </div>
-        <p className="fine">Previews are examples of what the app shows. Coming next: Guard, an optional layer that reviews risky actions before they run.</p>
+        <p className="fine">Previews are examples of what the app shows. Nexus starts locked each time it opens and refuses agent calls until you unlock it.</p>
       </div>
     </section>
   );
@@ -1933,7 +1907,7 @@ function Pricing() {
               <li><span className="chk"><Check size={12} weight="bold" /></span>Up to 2 projects</li>
               <li><span className="chk"><Check size={12} weight="bold" /></span>Core linking and routing</li>
             </ul>
-            <a href="#waitlist" className={`btn ${rec === "free" ? "btn-primary" : ""}`}>Join the waitlist</a>
+            <a href="#download" className={`btn ${rec === "free" ? "btn-primary" : ""}`}>Get the alpha</a>
           </article>
 
           <article className={`plan-card ${rec === "pro" ? "rec" : ""}`}>
@@ -1947,9 +1921,9 @@ function Pricing() {
             <ul className="plan-list">
               <li><span className="chk"><Check size={12} weight="bold" /></span>Unlimited projects and accounts</li>
               <li><span className="chk"><Check size={12} weight="bold" /></span>Longer activity history</li>
-              <li><span className="chk"><Check size={12} weight="bold" /></span>Guard, when it launches</li>
+              <li><span className="chk"><Check size={12} weight="bold" /></span>Guard (approve risky actions), if it ships</li>
             </ul>
-            <a href="#waitlist" className={`btn ${rec === "pro" ? "btn-primary" : ""}`}>Join the waitlist</a>
+            <a href="#download" className={`btn ${rec === "pro" ? "btn-primary" : ""}`}>Get the alpha</a>
           </article>
 
           <article className="plan-card muted-plan">
@@ -1964,7 +1938,7 @@ function Pricing() {
           </article>
         </div>
 
-        <p className="fine">Prices are approximate and may change at launch. Nothing is charged today.</p>
+        <p className="fine">The alpha is free. Prices are approximate and may change at launch. Nothing is charged today.</p>
       </div>
     </section>
   );
@@ -1972,14 +1946,15 @@ function Pricing() {
 
 /* ---------- FAQ ---------- */
 const FAQ: [string, string][] = [
-  ["Does my agent ever see my keys?", "No. The agent asks Nexus, and Nexus makes the call with the right account's login. Your logins are kept in your computer's secure storage."],
-  ["What if an agent skips Nexus?", "Then Nexus can't see or stop what it does. Nexus only protects what goes through it. It can find direct connections and offer to move them over."],
-  ["How does Nexus know which project an agent is in?", "It reads the project file in the folder and checks the Git remote. Claude Code and OpenCode tell Nexus their folder. Codex doesn't, so its folder is pinned in config. If Nexus can't tell, or the clues disagree, it asks you instead of guessing."],
-  ["Is every service protected equally?", "Supabase and GitHub get the deepest protection: Nexus checks each action against the project's own resource. For the other services it keeps the right account, but it can't see which resource inside that account the agent names. For those, use one account per project."],
-  ["Is it a password manager or a file sandbox?", "No. Nexus sends requests to the right account. It doesn't manage all your secrets, enforce company rules, or limit what an agent does to your files."],
-  ["Which computers does it run on?", "Linux first."],
-  ["What does it cost?", "The core stays free. Paid plans add unlimited projects and longer history. Prices may change at launch."],
-  ["Can I try it now?", "Join the list below and you'll get an email as soon as the Linux build is ready to download."],
+  ["Does my agent ever see my keys?", "No. The agent asks Nexus, and Nexus makes the call with the right account's login. Logins stay in your computer's keychain."],
+  ["What if an agent skips Nexus?", "Then Nexus can't see or stop what it does. It only covers calls made through it. An agent that still has a service's own tools, or a key in a file, can use them directly. Nexus finds direct MCP connections and offers to move them over."],
+  ["What can an agent change?", "By default, nothing. Nexus passes only actions a service marks read-only. You can allow safe writes for one binding at a time, and never for production."],
+  ["How does Nexus know which project an agent is in?", "It reads the project file in the folder and checks the Git remote. Claude Code and OpenCode tell Nexus their folder. Codex doesn't, so its folder is pinned in its config. If Nexus can't tell, or the clues disagree, it refuses and shows you why."],
+  ["Is every service held to one resource?", "Supabase is held to one project and GitHub to one repository. Some sign-in services can be limited to one project, site or base. The rest are kept to the right account, but Nexus can't tell resources apart inside it, so use one account per project for those."],
+  ["Can an agent change Nexus's own settings?", "Not through Nexus, and not from inside the project folder. But an agent allowed to run shell commands as you could edit the settings files on your computer. Nexus is a guard rail for agent calls, not a sandbox."],
+  ["Which computers does it run on?", "Linux, macOS and Windows. Linux is the one tested most; macOS and Windows builds are new. You need Node.js 20.10 or newer, which the app uses to run its local server."],
+  ["Why does my computer warn me when I open it?", "Alpha builds are not signed yet. On macOS, right-click the app and choose Open. On Windows, choose More info, then Run anyway."],
+  ["What does it cost?", "The alpha is free. Later, the core stays free; paid plans add unlimited projects and longer history. Prices may change."],
 ];
 
 function Faq() {
@@ -2003,8 +1978,50 @@ function Faq() {
   );
 }
 
-/* ---------- Waitlist ---------- */
-function Waitlist() {
+/* ---------- Download ----------
+   Driven by /release.json, so going live is an edit to that file and a deploy:
+   "waitlist" shows the email form, "available" shows the downloads.
+   See RELEASING.md. */
+type OsId = "linux" | "macos" | "windows";
+type Download = { os: OsId; label: string; url: string };
+type Release = { status: "waitlist" | "available"; version?: string; date?: string; notes?: string; downloads?: Download[] };
+
+const OS_NAME: Record<OsId, string> = { linux: "Linux", macos: "macOS", windows: "Windows" };
+const OPEN_HINT: Record<OsId, string> = {
+  linux: "Install the .deb, or make the .AppImage executable and run it.",
+  macos: "Not signed yet: the first time, right-click the app and choose Open.",
+  windows: "Not signed yet: if SmartScreen warns you, choose More info, then Run anyway.",
+};
+
+function detectOs(): OsId | null {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const p = `${nav.userAgentData?.platform ?? ""} ${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (/android|iphone|ipad/.test(p)) return null;
+  if (p.includes("win")) return "windows";
+  if (p.includes("mac")) return "macos";
+  if (p.includes("linux")) return "linux";
+  return null;
+}
+
+function useRelease(): Release {
+  const [release, setRelease] = useState<Release>({ status: "waitlist" });
+  useEffect(() => {
+    let live = true;
+    fetch("/release.json", { cache: "no-cache" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: Release | null) => {
+        const downloads = (data?.downloads ?? []).filter((d) => d && d.os in OS_NAME && /^https:\/\//.test(d.url));
+        if (live && data?.status === "available" && downloads.length) setRelease({ ...data, downloads });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return release;
+}
+
+function WaitlistForm({ available }: { available: boolean }) {
   const [email, setEmail] = useState("");
   const [honeypot, setHoneypot] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "success" | "duplicate" | "error">("idle");
@@ -2034,48 +2051,94 @@ function Waitlist() {
     }
   }
 
-  const done = status === "success" || status === "duplicate";
+  if (status === "success" || status === "duplicate") {
+    return (
+      <p className="wl-msg ok" role="status">
+        {status === "duplicate" ? "You are already on the list." : "You are on the list."}{" "}
+        {available ? `We will email ${email} when there is a new version.` : `We will email ${email} the download when the alpha is ready.`}
+      </p>
+    );
+  }
+  return (
+    <>
+      <form className="wl-form" onSubmit={onSubmit}>
+        <input
+          type="email"
+          placeholder="you@example.com"
+          aria-label="Email address"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          maxLength={254}
+          disabled={status === "sending"}
+        />
+        <input
+          className="hp"
+          type="text"
+          name="website"
+          value={honeypot}
+          onChange={(e) => setHoneypot(e.target.value)}
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+        />
+        <button type="submit" className={`btn ${available ? "" : "btn-primary"}`} disabled={status === "sending" || !email}>
+          {status === "sending" ? "Joining…" : available ? "Email me updates" : "Get the alpha"} <ArrowRight size={14} weight="bold" />
+        </button>
+      </form>
+      {status === "error" && <p className="wl-msg err" role="alert">{error}</p>}
+    </>
+  );
+}
+
+function DownloadSection() {
+  const release = useRelease();
+  const [os] = useState(detectOs);
+  const available = release.status === "available";
+  const downloads = release.downloads ?? [];
+  const mine = downloads.filter((d) => d.os === os);
+  const others = downloads.filter((d) => d.os !== os);
 
   return (
-    <section className="section" id="waitlist">
+    <section className="section" id="download">
       <div className="container waitlist">
-        <span className="label">Get notified</span>
-        <h2>Be first to try it.</h2>
-        <p className="lead">
-          One email, used only for launch news.
-        </p>
-        {done ? (
-          <p className="wl-msg ok" role="status">
-            {status === "duplicate" ? "You are already on the list." : "You are on the list."} We will email {email} when the first Linux build is ready.
-          </p>
+        <span className="label">{available ? `Alpha${release.version ? ` · v${release.version}` : ""}` : "Alpha"}</span>
+        {available ? (
+          <>
+            <h2>Try it on your own projects.</h2>
+            <p className="lead">Free during the alpha. Expect rough edges, and tell us what breaks.</p>
+            <div className="dl-main">
+              {(mine.length ? mine : downloads).map((d, i) => (
+                <a key={d.url} className={`btn ${i === 0 ? "btn-primary" : ""}`} href={d.url} rel="noopener">
+                  Download for {d.label} <ArrowRight size={14} weight="bold" />
+                </a>
+              ))}
+            </div>
+            {mine.length > 0 && others.length > 0 && (
+              <p className="dl-others">
+                Other systems:{" "}
+                {others.map((d, i) => (
+                  <span key={d.url}>{i > 0 && " · "}<a href={d.url} rel="noopener">{d.label}</a></span>
+                ))}
+              </p>
+            )}
+            {os && mine.length > 0 && <p className="dl-hint">{OPEN_HINT[os]}</p>}
+            {release.notes && /^https:\/\//.test(release.notes) && <p className="dl-hint"><a href={release.notes} rel="noopener">What's in this version</a></p>}
+          </>
         ) : (
-          <form className="wl-form" onSubmit={onSubmit}>
-            <input
-              type="email"
-              placeholder="you@example.com"
-              aria-label="Email address"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              maxLength={254}
-              disabled={status === "sending"}
-            />
-            <input
-              className="hp"
-              type="text"
-              name="website"
-              value={honeypot}
-              onChange={(e) => setHoneypot(e.target.value)}
-              tabIndex={-1}
-              autoComplete="off"
-              aria-hidden="true"
-            />
-            <button type="submit" className="btn btn-primary" disabled={status === "sending" || !email}>
-              {status === "sending" ? "Joining…" : "Notify me"} <ArrowRight size={14} weight="bold" />
-            </button>
-          </form>
+          <>
+            <h2>The alpha is almost ready.</h2>
+            <p className="lead">
+              First builds for Linux, macOS and Windows. Leave your email and we'll send you the download. One email, used only for Nexus news.
+            </p>
+          </>
         )}
-        {status === "error" && <p className="wl-msg err" role="alert">{error}</p>}
+        <ul className="dl-needs">
+          <li><Check size={14} weight="bold" /> Node.js 20.10 or newer</li>
+          <li><Check size={14} weight="bold" /> A coding agent: Claude Code, Codex or OpenCode</li>
+          <li><Check size={14} weight="bold" /> A project folder you work in</li>
+        </ul>
+        <WaitlistForm available={available} />
       </div>
     </section>
   );
@@ -2109,12 +2172,13 @@ function Footer({ theme }: { theme: Theme }) {
               <a href="#inside">What's inside</a>
               <a href="#pricing">Pricing</a>
               <a href="#faq">FAQ</a>
+              <a href="#download">Download</a>
               <a href="/llms.txt">llms.txt</a>
             </div>
           </div>
         </div>
         <p className="footer-bottom">
-          Linux first. Maps and examples on this page are illustrations.
+          Alpha for Linux, macOS and Windows. Maps and examples on this page are illustrations.
         </p>
       </div>
     </footer>
@@ -2142,7 +2206,7 @@ export default function App() {
         <Inside />
         <Pricing />
         <Faq />
-        <Waitlist />
+        <DownloadSection />
       </main>
       <Footer theme={theme} />
     </>
