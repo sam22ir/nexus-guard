@@ -1013,6 +1013,8 @@ function App() {
       {onboardingOpen && (
         <FirstRun
           resumeProject={resumeProject}
+          vaultUnlocked={vaultUnlocked}
+          onVaultUnlocked={() => setVaultUnlocked(true)}
           projects={projects}
           onRegister={(input) => addProject(input, { stay: true })}
           onOpenAddBinding={(projectId) => { setSelectedProject(projectId); setModal("connection"); }}
