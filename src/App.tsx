@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
-import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, setCustomServices, type CustomService, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
+import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, setCustomServices, type CustomService, saveAccounts, saveProjects, startingAccounts, startingProjects, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
@@ -54,7 +54,7 @@ function App() {
   // Lookups made in the same tick as a new account (add-binding creates one inline) must see it.
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
-  const project = useMemo(() => projects.find((item) => item.id === selectedProject || item.name === selectedProject) ?? projects[0], [projects, selectedProject]);
+  const project = useMemo<Project | undefined>(() => projects.find((item) => item.id === selectedProject || item.name === selectedProject) ?? projects[0], [projects, selectedProject]);
   // Setup counts as done once any agent has called Nexus. A skipped setup resumes at the agent step for the selected real project.
   const { entries: auditEntries, loaded: auditLoaded } = useAuditLog(projects);
   const setupIncomplete = auditLoaded && !auditEntries.some((entry) => entry.agent);
@@ -285,20 +285,15 @@ function App() {
   async function removeProject(projectId: string) {
     const target = projects.find((item) => item.id === projectId);
     if (!target) return;
-    if (projects.length <= 1) {
-      setNotice("Keep at least one project. Edit it instead of removing the last one.");
-      return;
-    }
     if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from this desktop vault.`)) return;
     for (const connection of target.connections) {
       await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
       await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
       await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
-    await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
     }
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);
-    if (selectedProject === projectId) setSelectedProject(remaining[0].id);
+    if (selectedProject === projectId) setSelectedProject(remaining[0]?.id ?? "");
     setNotice(`Project ${target.name} removed, approvals deleted from this vault. Its folders on disk are untouched.`);
   }
 
@@ -787,6 +782,7 @@ function App() {
     // Best-effort vault cleanup first; a missing entry is not an error.
     await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
     await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
+    await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
     await removePublishableKey(projectId, connection.id).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connection.id) } : item));
     setSavedKeys((current) => {
@@ -952,7 +948,7 @@ function App() {
         active={view}
         onNavigate={navigate}
         railFooter={railFooter}
-        crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
+        crumbs={scopedView && project ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
         fill={view === "home" || view === "project" || view === "connections"}
         actions={
@@ -966,7 +962,7 @@ function App() {
             )}
           </>
         }
-        status={scopedView ? <Badge tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "success"} dot>{project.environment}</Badge> : undefined}
+        status={scopedView && project ? <Badge tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "success"} dot>{project.environment}</Badge> : undefined}
         banner={
           <>
             {!desktopAvailable() && (
@@ -994,16 +990,16 @@ function App() {
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
       {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
-        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log return to starter examples. Vault approvals in the OS keychain are untouched.")) return;
+        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log are cleared. Vault approvals in the OS keychain are untouched.")) return;
         try {
           window.localStorage.removeItem("nexus-guard.projects");
           window.localStorage.removeItem("nexus-guard.accounts");
           window.localStorage.removeItem("nexus-guard.errors");
           window.localStorage.removeItem("nexus-guard.selected-project");
         } catch { /* ignore */ }
-        setProjects(starterProjects);
-        setAccounts(starterAccounts);
-        setSelectedProject(starterProjects[0].id);
+        setProjects(startingProjects());
+        setAccounts(startingAccounts());
+        setSelectedProject(startingProjects()[0]?.id ?? "");
         setErrorLog([]);
         navigate("overview");
         setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per binding if needed.");

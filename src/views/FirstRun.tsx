@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable, unlockVault } from "../vault";
-import { type Project } from "../store";
+import { starterProjects, type Project } from "../store";
 import { ThemeButton, nexusHttpUrlFor } from "../onboarding";
 import { agentDisplayName } from "../topology";
 import { type AgentConfigEdit, type AgentTestStep, type AuditEntry, type DetectedAgent, type FolderInspection } from "../app/types";
@@ -55,6 +55,9 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
   const [written, setWritten] = useState<AgentConfigEdit | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState("");
+  // Setup checks run when the agent is connected. These are not proof that the agent works.
+  const [connectChecks, setConnectChecks] = useState<AgentTestStep[]>([]);
+  // Only the optional "simulated check" in the last step counts as a stand-in for the agent's first call.
   const [checks, setChecks] = useState<AgentTestStep[]>([]);
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState("");
@@ -183,13 +186,13 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
   async function connectAgent() {
     if (!project || !agentId) return;
     if (!desktop) { setConnectError("Open the desktop app to connect an agent."); return; }
-    setConnecting(true); setConnectError(""); setChecks([]);
+    setConnecting(true); setConnectError(""); setConnectChecks([]);
     await ensureServer();
     const httpUrl = nexusHttpUrlFor(project.path);
     try {
       const result = await invoke<string | AgentConfigEdit>("connect_agent_to_project", { workspacePath: project.path, agentId, httpUrl });
       setWritten(typeof result === "string" ? { path: result, backup: "", diff: "" } : result);
-      setChecks(await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId, httpUrl }));
+      setConnectChecks(await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId, httpUrl }));
     } catch {
       setConnectError(`Could not write ${agentFile}. Check the folder still exists and the file is valid, or use the manual steps.`);
     } finally {
@@ -235,13 +238,17 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
     if (project) onOpenAddBinding(project.id);
   }
 
-  const otherProject = projects.find((p) => p.id !== registeredId && (p.connections ?? []).length > 0);
+  // A real project of the user's only: the built-in sample projects must not be shown as if they were theirs.
+  const otherProject = projects.find((p) => p.id !== registeredId && !starterProjects.some((sample) => sample.id === p.id) && (p.connections ?? []).length > 0);
   const summaries = [
     project ? project.path : null,
     connected && agent ? agent.name : null,
     proven ? "Routed" : null,
   ];
-  const checkList = (list: AgentTestStep[]) => (
+  // "Saved approval" is about a Supabase binding, which a new user does not have yet; a red mark there reads as a failure.
+  const checkList = (all: AgentTestStep[]) => {
+    const list = all.filter((c) => c.step !== "Saved approval");
+    return (
     <ul className="rounded-[12px] border border-(--line)">
       {list.map((c, i) => (
         <li key={c.step} className="flex items-start gap-2.5 px-3 py-2" style={i > 0 ? { borderTop: "1px solid var(--line-soft)" } : undefined}>
@@ -250,7 +257,8 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
         </li>
       ))}
     </ul>
-  );
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-(--canvas)">
@@ -322,7 +330,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                 <div><h2 className="text-[16px] font-semibold text-(--text)">Connect your agent</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">{agentsFound ? "Found on this machine. Pick the one you use." : desktop ? "No agent was detected, so these are the common ones." : "The desktop app lists the agents it finds."}</p></div>
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Agent">
                   {agents.map((a) => (
-                    <button key={a.id} type="button" role="radio" aria-checked={agentId === a.id} onClick={() => { setAgentId(a.id); setWritten(null); setChecks([]); setConnectError(""); }} className="nx-badge cursor-pointer !px-3.5 !py-2 text-[12.5px]" style={agentId === a.id ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{a.name}</button>
+                    <button key={a.id} type="button" role="radio" aria-checked={agentId === a.id} onClick={() => { setAgentId(a.id); setWritten(null); setConnectChecks([]); setConnectError(""); }} className="nx-badge cursor-pointer !px-3.5 !py-2 text-[12.5px]" style={agentId === a.id ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{a.name}</button>
                   ))}
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -336,7 +344,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                   </p>
                 )}
                 {connected && locked && <p className="text-[12px] leading-[1.55] text-(--muted)">Next you'll unlock Nexus, so your agent is allowed to call it.</p>}
-                {checks.length > 0 && checkList(checks)}
+                {connectChecks.length > 0 && checkList(connectChecks)}
                 {project && <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, agentId)}>Prefer to run the command yourself?</button>}
               </div>
             )}
@@ -355,7 +363,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                     <Button type="submit" size="sm" isDisabled={unlocking || password.length < 12} className="self-start">{unlocking ? "Unlocking…" : "Unlock Nexus"}</Button>
                   </form>
                 )}
-                <div><h2 className="text-[16px] font-semibold text-(--text)">See your agent reach Nexus</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Restart {agent?.name ?? "your agent"} in <span className="nx-mono">{project?.path ?? "your project"}</span>, then send it this message.</p></div>
+                <div><h2 className="text-[16px] font-semibold text-(--text)">See your agent reach Nexus</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Restart {agent?.name ?? "your agent"} in <span className="nx-mono">{project?.path ?? "your project"}</span>, then send it this message.{agentId === "claude" && " Claude Code will ask whether to trust the “nexus” server from .mcp.json. Choose yes, or it will never connect."}{agentId === "codex" && " Codex reads .codex/config.toml in that folder, so start it there."}</p></div>
                 <div className="flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
                   <span className="min-w-0 flex-1 text-[13px] text-(--text)">{FIRST_PROMPT}</span>
                   <Button size="sm" variant="outline" onPress={copyPrompt}>{copied ? "Copied" : "Copy"}</Button>

@@ -76,7 +76,7 @@ export function SettingsView({ projects, savedKeys, vaultUnlocked, onUnlocked, o
       <Card className="shrink-0">
         <CardHeading eyebrow="Danger zone" title="Reset local data" />
         <p className="max-w-[65ch] text-[13px] leading-[1.6] text-(--muted)">
-          Projects, setup progress, and the kept error log return to starter examples. Folders on disk and OS-keychain approvals are untouched.
+          Projects, accounts, setup progress, and the kept error log are cleared from this app. Folders on disk and OS-keychain approvals are untouched.
         </p>
         <Button size="sm" variant="danger-soft" className="mt-4" onPress={onReset}>Reset local data</Button>
       </Card>

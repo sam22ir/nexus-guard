@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import services from "../mcp/services.json";
 export type AccountAuthState = "not_connected" | "pending" | "connected";
 
@@ -267,16 +268,22 @@ export function makeAccountId(provider: string, label: string, existing: Account
   return `${base}-${n}`;
 }
 
+/** A fresh desktop install starts empty. The sample projects and accounts only fill the browser
+ *  preview used for interface work, where there is no desktop backend to hold real ones. */
+export const startingAccounts = (): Account[] => (isTauri() ? [] : starterAccounts);
+export const startingProjects = (): Project[] => (isTauri() ? [] : starterProjects);
+
 export function loadAccounts(): Account[] {
-  if (typeof window === "undefined") return starterAccounts;
+  if (typeof window === "undefined") return startingAccounts();
   try {
     const saved = window.localStorage.getItem(ACCOUNTS_STORAGE_KEY);
-    if (!saved) return starterAccounts;
+    if (!saved) return startingAccounts();
     const parsed = JSON.parse(saved) as Account[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return starterAccounts;
+    if (!Array.isArray(parsed)) return startingAccounts();
+    if (parsed.length === 0) return startingAccounts();
     return parsed.filter((a) => a && typeof a.id === "string" && typeof a.provider === "string");
   } catch {
-    return starterAccounts;
+    return startingAccounts();
   }
 }
 
@@ -396,13 +403,13 @@ export const starterProjects: Project[] = [
 ];
 
 export function loadProjects(): Project[] {
-  if (typeof window === "undefined") return starterProjects;
+  if (typeof window === "undefined") return startingProjects();
 
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (!saved) return starterProjects;
+    if (!saved) return startingProjects();
     const projects = JSON.parse(saved) as Project[];
-    if (!Array.isArray(projects) || projects.length === 0) return starterProjects;
+    if (!Array.isArray(projects) || projects.length === 0) return startingProjects();
     // Migrate pre-Environment entries (Notion §2): default from branch/target.
     // Also preserves pre-Account entries: old {target} connections without
     // account/accountId keep working with both alias sides backfilled.
@@ -420,7 +427,7 @@ export function loadProjects(): Project[] {
       };
     });
   } catch {
-    return starterProjects;
+    return startingProjects();
   }
 }
 
