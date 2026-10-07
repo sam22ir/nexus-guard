@@ -15,7 +15,7 @@ import { classify, decideGuard, resolveOverride } from "./guard-policy.mjs";
 // guard-policy (decideGuard/resolveOverride) + costBearing/escapeHatch axes are
 // paid-tier only. MVP routing is read-allow/block via decideExecute below with
 // GUARD_ENABLED=false. Enforcement in guard-policy.mjs is kept, never deleted.
-import { curatedDecision, isReadTool, normalizeProvider, providerTier } from "./providers.mjs";
+import { curatedDecision, isReadTool, normalizeProvider, providerTier, serviceMcpUrl, remoteToolDecision } from "./providers.mjs";
 
 // Phase 1 (Guard hide, MVP): Guard extras (overrides, cost axis, escape hatch)
 // are OFF unless GUARD_ENABLED=1/true. Routing enforcement (read-allow/block)
@@ -531,6 +531,19 @@ async function connectSupabase(connection, accessToken) {
  * Auth is a short-lived token from the OS keychain, never returned to the agent.
  */
 const GITHUB_MCP_URL = process.env.NEXUS_GITHUB_MCP_URL ?? "https://api.githubcopilot.com/mcp";
+async function connectRemoteMcp(url, accessToken) {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+  const client = new Client({ name: "nexus-guard", version: "0.3.0" }, { capabilities: {} });
+  await client.connect(transport, { timeout: 15_000 });
+  return {
+    listTools: (params) => client.listTools(params, { timeout: 15_000 }),
+    callTool: (params, schema, options) => client.callTool(params, schema, options),
+    close: () => transport.close(),
+  };
+}
+
 async function connectGitHub(_connection, accessToken) {
   const transport = new StreamableHTTPClientTransport(new URL(GITHUB_MCP_URL), {
     requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -662,13 +675,17 @@ export function pickWorkspaceFromRoots(roots) {
 }
 
 /** Directly relays upstream tool definitions and calls, rather than reimplementing provider tools. */
-export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
+export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
   const server = new Server({ name: "nexus-guard", version: "0.3.0" }, { capabilities: { tools: { listChanged: false } } });
   const dependencies = { getToken, connectProvider, refreshToken };
   const githubDeps = {
     getToken: getGithubToken ?? ((projectId, connectionId) => readProviderToken("github", projectId, connectionId)),
     connectProvider: connectGithubProvider ?? connectGitHub,
     refreshToken,
+  };
+  const remoteDeps = {
+    getToken: getRemoteToken ?? ((provider, projectId, connectionId) => readProviderToken(provider, projectId, connectionId)),
+    connect: connectRemoteProvider ?? connectRemoteMcp,
   };
   // `workspace: null` defers binding to the client's MCP roots (paper §7/§10):
   // used only when no explicit workspace was supplied. Once bound it never
@@ -869,6 +886,45 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
     }
   }
 
+  /** A signed-in remote MCP service (Linear, Stripe, …). Only tools that declare themselves
+   *  read-only are forwarded; everything else needs approval and never reaches the service.
+   *  Isolation here is the signed-in account, not one resource. */
+  async function executeRemoteOperation(context, connection, providerName, operation, args, opts = {}) {
+    const auditSid = opts.auditSessionId ?? `anon:${instanceId}`;
+    const url = serviceMcpUrl(providerName);
+    const log = (decision, reason) => audit({ ...auditRecord({ sessionId: auditSid, context, connection, operation, decision, reason }), __context: context });
+    let provider;
+    try {
+      const token = await remoteDeps.getToken(normalizeProvider(providerName), context.project_id, connection.connection_id);
+      provider = await remoteDeps.connect(url, token);
+      const listed = await provider.listTools();
+      const tools = Array.isArray(listed?.tools) ? listed.tools : [];
+      if (operation === "list_tools") {
+        await log("allow", null);
+        return jsonResult({ provider: providerName, tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", read_only: remoteToolDecision(t).decision === "allow" })) });
+      }
+      const tool = tools.find((t) => t.name === operation);
+      if (!tool) {
+        await log("block", "tool not offered by provider");
+        return blocked("This service does not offer that tool right now. Run list_tools to see what it offers.", { operation });
+      }
+      const policy = remoteToolDecision(tool);
+      if (policy.decision !== "allow") {
+        await log("approval_required", policy.reason);
+        return decisionResult("approval_required", { reason: policy.reason, operation }, true);
+      }
+      const result = await provider.callTool({ name: operation, arguments: args ?? {} }, undefined, { timeout: 20_000 });
+      await log("allow", null);
+      return result;
+    } catch (error) {
+      console.error(`Nexus remote service call failed: ${error instanceof Error ? error.name : "unknown error"}`);
+      await log("block", "provider unavailable");
+      return blocked(`${String(providerName)} is unavailable or the saved sign-in needs attention. Reconnect it in Accounts if this persists.`);
+    } finally {
+      await provider?.close?.().catch(() => undefined);
+    }
+  }
+
   async function executeCuratedOperation(context, connection, providerName, upstreamName, opts = {}) {
     const env = connection.environment ?? context.environment;
     let policy = decideCuratedExecute({ provider: providerName, operation: upstreamName, env });
@@ -1058,6 +1114,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
           await audit({ ...auditRecord({ sessionId: auditSid, context, connection: base, operation, decision: "block", reason: crossTarget ? "cross-account target" : "no approved connection" }), __context: context });
           return blocked(crossTarget ? "That target does not belong to this project. Use the configured project connection, or ask the developer to add it." : `No approved ${String(args.provider)} connection belongs to this project (${tier} tier defaults to approval). Ask the developer to connect it, then retry.`, { operation });
         }
+        if (serviceMcpUrl(provider)) return executeRemoteOperation(context, connection, provider, operation, opArgs, { auditSessionId: auditSid });
         return executeCuratedOperation(context, connection, provider, operation, { auditSessionId: auditSid });
       }
       // Cross-account enforcement before provider: top-level account/target or nested
@@ -1097,6 +1154,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
         const upstreamName = name.slice(sep + 2);
         if (maybeProvider && maybeProvider !== "supabase" && maybeProvider !== "github" && upstreamName) {
           const connection = approvedCurated(context, maybeProvider, args);
+          if (connection && serviceMcpUrl(maybeProvider)) return executeRemoteOperation(context, connection, maybeProvider, upstreamName, args, { auditSessionId: auditSid });
           if (connection) return executeCuratedOperation(context, connection, maybeProvider, upstreamName, { auditSessionId: auditSid });
         }
       }

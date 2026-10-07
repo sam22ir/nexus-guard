@@ -13,6 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use url::form_urlencoded;
 
 mod github_auth;
+#[allow(dead_code)] // refresh is used by the nexus-keyring helper, which shares this file
+mod mcp_oauth;
 
 const MCP_RESOURCE: &str = "https://mcp.supabase.com/mcp";
 const AUTHORIZATION_ENDPOINT: &str = "https://api.supabase.com/v1/oauth/authorize";
@@ -2591,6 +2593,148 @@ async fn list_github_repos(project_id: String, connection_id: String) -> Result<
     .map_err(|_| "Nexus could not load your GitHub repositories. Try again.".to_string())?
 }
 
+// ---- Any remote MCP service: discover, register, sign in (see mcp_oauth.rs) ----
+
+#[derive(Default)]
+struct McpOAuthState {
+    result: Option<McpOAuthResult>,
+    /// Flipped by `cancel_mcp_oauth` so an abandoned sign-in can never save tokens.
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+#[derive(Clone, Default)]
+struct McpOAuthManager(Arc<Mutex<McpOAuthState>>);
+
+#[derive(Debug, Clone, Serialize)]
+struct McpOAuthResult {
+    success: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct McpOAuthStart {
+    authorization_url: String,
+    /// The read-only scopes asked for ("" when the service advertises none).
+    scopes: String,
+}
+
+fn mcp_key(service: &str, project_id: &str, connection_id: &str) -> Result<String, String> {
+    let slug_ok = (2..=40).contains(&service.len()) && service.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let id_ok = |v: &str| !v.is_empty() && v.len() <= 128 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !slug_ok || !id_ok(project_id) || !id_ok(connection_id) {
+        return Err("That connection is not valid. Start again.".to_string());
+    }
+    Ok(format!("mcp:{service}:{project_id}:{connection_id}"))
+}
+
+/// Wait for the browser to come back, then trade the code for tokens and save
+/// them straight to the keychain. The page only learns success or failure.
+fn run_mcp_callback(listener: TcpListener, manager: McpOAuthManager, cancelled: Arc<std::sync::atomic::AtomicBool>, ctx: mcp_oauth::TokenContext, state: String, verifier: String, redirect_uri: String, key: String) {
+    let _ = listener.set_nonblocking(true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(_) if cancelled.load(std::sync::atomic::Ordering::SeqCst) => return,
+            Err(_) if std::time::Instant::now() < deadline => thread::sleep(std::time::Duration::from_millis(200)),
+            Err(_) => {
+                if let Ok(mut inner) = manager.0.lock() {
+                    inner.result = Some(McpOAuthResult { success: false, error: Some("The sign-in took too long. Start again.".to_string()) });
+                }
+                return;
+            }
+        }
+    };
+    let _ = stream.set_nonblocking(false);
+    let mut request = [0u8; 8192];
+    let size = stream.read(&mut request).unwrap_or(0);
+    let request = String::from_utf8_lossy(&request[..size]);
+    let query = |parsed: &url::Url, name: &str| parsed.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+    let parsed = request
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("GET "))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|path| url::Url::parse(&format!("http://localhost{path}")).ok());
+    let outcome: Result<(), String> = match parsed {
+        _ if cancelled.load(std::sync::atomic::Ordering::SeqCst) => Err("The sign-in was cancelled.".to_string()),
+        None => Err("The sign-in reply was not understood. Try connecting again.".to_string()),
+        Some(parsed) if query(&parsed, "state").as_deref() != Some(state.as_str()) => Err("The sign-in reply did not match this request. Try connecting again.".to_string()),
+        Some(parsed) if query(&parsed, "error").is_some() => Err("The sign-in was declined or did not complete. Try connecting again.".to_string()),
+        Some(parsed) => match query(&parsed, "code") {
+            None => Err("The sign-in did not complete. Try connecting again.".to_string()),
+            Some(code) => mcp_oauth::exchange_code(&ctx, &code, &redirect_uri, &verifier).and_then(|tokens| {
+                keyring_entry(&key)?
+                    .set_password(&tokens.to_json())
+                    .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())
+            }),
+        },
+    };
+    callback_response(&mut stream, if outcome.is_ok() { "Nexus Guard is connected" } else { "Nexus Guard could not connect" });
+    if let Ok(mut inner) = manager.0.lock() {
+        inner.result = Some(McpOAuthResult { success: outcome.is_ok(), error: outcome.err() });
+    }
+}
+
+#[tauri::command]
+async fn start_mcp_oauth(
+    state: tauri::State<'_, McpOAuthManager>,
+    server_url: String,
+    service: String,
+    project_id: String,
+    connection_id: String,
+) -> Result<McpOAuthStart, String> {
+    let key = mcp_key(&service, &project_id, &connection_id)?;
+    let manager = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let discovery = mcp_oauth::discover(&server_url)?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "Nexus could not open its local sign-in page. Close anything using that port and try again.".to_string())?;
+        let port = listener.local_addr().map_err(|_| "Nexus could not open its local sign-in page.".to_string())?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
+        let (client_id, client_secret) = mcp_oauth::register(&discovery, &redirect_uri)?;
+        let state_token = random_token();
+        let verifier = random_token();
+        let scopes = mcp_oauth::read_scopes(&discovery.scopes_supported).join(" ");
+        let authorization_url = mcp_oauth::authorization_url(&discovery, &client_id, &redirect_uri, &mcp_oauth::pkce_challenge(&verifier), &state_token, &scopes)?;
+        let ctx = mcp_oauth::TokenContext {
+            token_endpoint: discovery.token_endpoint.clone(),
+            client_id,
+            client_secret,
+            auth_method: discovery.auth_method,
+            resource: Some(discovery.resource.clone()),
+            previous_refresh_token: None,
+        };
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(mut inner) = manager.0.lock() {
+            // A new attempt replaces any earlier one, which can then no longer save anything.
+            if let Some(previous) = inner.cancel.replace(cancelled.clone()) {
+                previous.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            inner.result = None;
+        }
+        thread::spawn(move || run_mcp_callback(listener, manager, cancelled, ctx, state_token, verifier, redirect_uri, key));
+        Ok(McpOAuthStart { authorization_url, scopes })
+    })
+    .await
+    .map_err(|_| "Nexus could not start the sign-in. Try again.".to_string())?
+}
+
+#[tauri::command]
+fn poll_mcp_oauth(state: tauri::State<'_, McpOAuthManager>) -> Option<McpOAuthResult> {
+    state.inner().0.lock().ok()?.result.take()
+}
+
+/// Stop waiting for the browser. Nothing from this sign-in is saved afterwards.
+#[tauri::command]
+fn cancel_mcp_oauth(state: tauri::State<'_, McpOAuthManager>) {
+    if let Ok(mut inner) = state.inner().0.lock() {
+        if let Some(flag) = inner.cancel.take() {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        inner.result = None;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2615,6 +2759,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(OAuthManager::default())
         .manage(NexusServer::default())
+        .manage(McpOAuthManager::default())
         // IMPORTANT: Tauri converts each command parameter name to lowerCamelCase
         // before matching request args. The frontend must therefore send camelCase
         // keys (workspacePath, projectId, …) even though Rust names stay snake_case.
@@ -2646,7 +2791,10 @@ pub fn run() {
             github_status,
             start_github_device_flow,
             poll_github_device_flow,
-            list_github_repos
+            list_github_repos,
+            start_mcp_oauth,
+            poll_mcp_oauth,
+            cancel_mcp_oauth
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");

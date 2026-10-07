@@ -4,12 +4,18 @@ use std::env;
 #[allow(dead_code)]
 #[path = "../github_auth.rs"]
 mod github_auth;
+#[allow(dead_code)]
+#[path = "../mcp_oauth.rs"]
+mod mcp_oauth;
 
 const SERVICE: &str = "com.nexusguard.app";
 
-/// Providers whose approvals the Nexus server may read back. Each is stored by
-/// the desktop app under `mcp:<provider>:<project-id>:<connection-id>`.
-const PROVIDERS: [&str; 2] = ["supabase", "github"];
+/// A provider is a lowercase service slug such as `supabase`, `github` or `linear`.
+/// Each approval is stored by the desktop app under
+/// `mcp:<provider>:<project-id>:<connection-id>`.
+fn valid_provider(value: &str) -> bool {
+    (2..=40).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
 
 fn valid_id(value: &str) -> bool {
     !value.is_empty()
@@ -22,7 +28,7 @@ fn valid_id(value: &str) -> bool {
 /// The keychain entry for `<provider> <project-id> <connection-id>`, or `None`
 /// for an unknown provider or an id that could escape the key format.
 fn keychain_key(args: &[String]) -> Option<String> {
-    if args.len() != 3 || !PROVIDERS.contains(&args[0].as_str()) || !valid_id(&args[1]) || !valid_id(&args[2]) {
+    if args.len() != 3 || !valid_provider(&args[0]) || !valid_id(&args[1]) || !valid_id(&args[2]) {
         return None;
     }
     Some(format!("mcp:{}:{}:{}", args[0], args[1], args[2]))
@@ -33,7 +39,7 @@ fn keychain_key(args: &[String]) -> Option<String> {
 /// Any problem falls back to the stored value, which then fails visibly upstream.
 fn renewed_if_needed(provider: &str, key: &str, stored: String) -> String {
     if provider != "github" {
-        return stored;
+        return renewed_mcp(key, stored);
     }
     let Some(tokens) = github_auth::Tokens::from_json(&stored) else { return stored };
     if !tokens.needs_refresh(github_auth::now_secs()) {
@@ -41,6 +47,22 @@ fn renewed_if_needed(provider: &str, key: &str, stored: String) -> String {
     }
     let (Some(client_id), Some(refresh_token)) = (github_auth::client_id(), tokens.refresh_token.as_deref()) else { return stored };
     match github_auth::refresh(&client_id, refresh_token) {
+        Ok(renewed) => {
+            let json = renewed.to_json();
+            let _ = keyring::Entry::new(SERVICE, key).and_then(|entry| entry.set_password(&json));
+            json
+        }
+        Err(_) => stored,
+    }
+}
+
+/// Any other service: renew a nearly-expired sign-in with the client Nexus registered for it.
+fn renewed_mcp(key: &str, stored: String) -> String {
+    let Some(tokens) = mcp_oauth::Tokens::from_json(&stored) else { return stored };
+    if !tokens.needs_refresh(mcp_oauth::now_secs()) {
+        return stored;
+    }
+    match mcp_oauth::refresh(&tokens) {
         Ok(renewed) => {
             let json = renewed.to_json();
             let _ = keyring::Entry::new(SERVICE, key).and_then(|entry| entry.set_password(&json));
@@ -80,8 +102,17 @@ mod tests {
     }
 
     #[test]
-    fn refuses_other_providers_and_unsafe_ids() {
-        assert_eq!(keychain_key(&args(&["stripe", "koupa", "x"])), None);
+    fn any_service_slug_works_but_nothing_that_could_escape_the_key() {
+        assert_eq!(keychain_key(&args(&["linear", "koupa", "koupa-ln"])).as_deref(), Some("mcp:linear:koupa:koupa-ln"));
+        assert_eq!(keychain_key(&args(&["hugging-face", "p", "c"])).as_deref(), Some("mcp:hugging-face:p:c"));
+        assert_eq!(keychain_key(&args(&["Linear", "p", "c"])), None);
+        assert_eq!(keychain_key(&args(&["a", "p", "c"])), None);
+        assert_eq!(keychain_key(&args(&["li:near", "p", "c"])), None);
+        assert_eq!(keychain_key(&args(&["", "p", "c"])), None);
+    }
+
+    #[test]
+    fn refuses_unsafe_ids_and_wrong_argument_counts() {
         assert_eq!(keychain_key(&args(&["github", "koupa:other", "x"])), None);
         assert_eq!(keychain_key(&args(&["github", "koupa", "../x"])), None);
         assert_eq!(keychain_key(&args(&["github", "koupa"])), None);

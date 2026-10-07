@@ -10,6 +10,8 @@
 // to match UI vocabulary; enforcement stays fail-closed (approval_required) for
 // both curated and self-added. Do NOT delete enforcement.
 
+import services from "./services.json" with { type: "json" };
+
 export const PROVIDER_TIERS = Object.freeze(["native", "curated", "self-added"]);
 
 /** Minimal native read allowlists. Runtime still intersects with upstream listTools. */
@@ -127,4 +129,26 @@ export function isCostBearing(provider, _operation) {
   const name = normalizeProvider(provider);
   if (NATIVE_PROVIDERS[name]) return NATIVE_PROVIDERS[name].costBearingDefault === true;
   return false;
+}
+
+/** The remote MCP address Nexus signs in to for this service, or null when it has none. */
+export function serviceMcpUrl(provider) {
+  const entry = services[normalizeProvider(provider)];
+  return entry && typeof entry === "object" && typeof entry.mcpUrl === "string" ? entry.mcpUrl : null;
+}
+
+/**
+ * Read-only rule for a remote service's tools, taken from what the tool says
+ * about itself (MCP tool annotations). Only a tool that declares itself
+ * read-only, and does not also declare itself destructive, goes through.
+ * Anything else, including a tool with no annotations, needs approval and is
+ * never forwarded. Fail-closed.
+ */
+export function remoteToolDecision(tool) {
+  const a = tool && typeof tool === "object" ? tool.annotations : null;
+  if (a && a.readOnlyHint === true && a.destructiveHint !== true) return { decision: "allow", reason: null };
+  return {
+    decision: "approval_required",
+    reason: "This tool is not marked read-only by the service, so it needs developer approval and was not run.",
+  };
 }

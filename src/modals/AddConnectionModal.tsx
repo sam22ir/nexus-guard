@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { GithubConnectPanel, type GithubApi } from "./GithubConnectPanel";
-import { tierForProvider, PROVIDER_CATALOG, type Account, type Connection, type Project } from "../store";
+import { ServiceConnectPanel, type RemoteServiceApi } from "./ServiceConnectPanel";
+import { tierForProvider, remoteServiceUrl, PROVIDER_CATALOG, type Account, type Connection, type Project } from "../store";
 import { Button } from "@heroui/react";
 import { Segmented } from "../ui";
 import { inputClass, selectClass } from "../app/styles";
@@ -18,7 +19,7 @@ function defaultsFor(provider: string): { detail: string; tone: Connection["tone
 
 /** Bind one account and resource to a project. Supabase defaults to browser
  *  approval then a project pick; every other service is a short manual form. */
-export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
+export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, remote, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
   projectId: string;
   projectName: string;
   environment?: string;
@@ -32,13 +33,15 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   onCreateAccount: (input: { provider: string; label: string }) => string;
   /** Connect the user's own GitHub account (device flow). */
   github: GithubApi;
+  /** Sign in to any other service on the launch list. */
+  remote: RemoteServiceApi;
   onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: PickedProject[]; listError?: string }>;
   onConfirmMcp: (projectId: string, connectionId: string, choice: PickedProject) => void;
   onCancelMcp: (projectId: string, connectionId: string) => void;
   onAbortMcp: () => void;
 }) {
   const [provider, setProvider] = useState(initialProvider ?? "Supabase");
-  const [method, setMethod] = useState<"manual" | "mcp">(() => { const first = initialProvider ?? "Supabase"; return first === "Supabase" || (first === "GitHub" && github.configured) ? "mcp" : "manual"; });
+  const [method, setMethod] = useState<"manual" | "mcp">(() => { const first = initialProvider ?? "Supabase"; return first === "Supabase" || (first === "GitHub" && github.configured) || (!!remoteServiceUrl(first) && remote.available) ? "mcp" : "manual"; });
   const [target, setTarget] = useState("");
   const [projectRef, setProjectRef] = useState("");
   const [url, setUrl] = useState("");
@@ -78,6 +81,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   const isSupabase = provider === "Supabase";
   const isGithub = provider === "GitHub";
   const githubBrowser = isGithub && github.configured;
+  const remoteBrowser = !isSupabase && !isGithub && !!remoteServiceUrl(provider);
   const providerTier = provider.trim() ? tierForProvider(provider) : "self-added";
   const [selfAddedConfirm, setSelfAddedConfirm] = useState(false);
   useEffect(() => { setSelfAddedConfirm(false); }, [provider]);
@@ -92,7 +96,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
 
   function changeProvider(next: string) {
     setProvider(next);
-    setMethod(next === "Supabase" || (next === "GitHub" && github.configured) ? "mcp" : "manual");
+    setMethod(next === "Supabase" || (next === "GitHub" && github.configured) || (!!remoteServiceUrl(next) && remote.available) ? "mcp" : "manual");
     setMcpPhase("auth");
     setError("");
     setAccountId(accounts.find((a) => a.provider.toLowerCase() === next.toLowerCase())?.id ?? NEW_ACCOUNT);
@@ -155,7 +159,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
     onConfirmMcp(projectId, mcpConnectionId, choice);
   }
 
-  const onModalClose = method === "mcp" && !githubBrowser ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
+  const onModalClose = method === "mcp" && !githubBrowser && !remoteBrowser ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
   const canConfirmPick = !busy && (manualEntry || pickedRef.startsWith("manual:") ? projectRef.trim().length > 0 && target.trim().length > 0 : pickedRef.length > 0);
   const env = environment ?? "development";
 
@@ -200,7 +204,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
           </>
         )}
 
-        {(isSupabase || githubBrowser) && !picking && (
+        {(isSupabase || githubBrowser || (remoteBrowser && remote.available)) && !picking && (
           <Segmented label="How to connect" value={method} onChange={(value) => { setMethod(value); setError(""); }} options={[{ value: "mcp", label: "Browser approval" }, { value: "manual", label: "Enter details" }]} />
         )}
 
@@ -270,12 +274,14 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
           </>
         )}
 
+        {remoteBrowser && method === "mcp" && <ServiceConnectPanel provider={provider} remote={remote} resolveAccountId={resolveAccountId} onClose={onClose} />}
+
         {githubBrowser && method === "mcp" && <GithubConnectPanel github={github} projectId={projectId} onDiscard={(connectionId) => onCancelMcp(projectId, connectionId)} onClose={onClose} />}
 
-        {!picking && !(githubBrowser && method === "mcp") && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
+        {!picking && !(githubBrowser && method === "mcp") && !(remoteBrowser && method === "mcp") && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
         {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
 
-        {!(githubBrowser && method === "mcp") && <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
+        {!(githubBrowser && method === "mcp") && !(remoteBrowser && method === "mcp") && <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
           {picking ? (
             <>
               <Button size="sm" variant="outline" isDisabled={busy} onPress={cancelAuthorize}>Cancel</Button>

@@ -86,16 +86,17 @@ test("GitHub native: cross-target and writes block before provider", async (t) =
   assert(audits.some((a) => a.provider === "github"));
 });
 
-test("Curated passthrough: notion execute requires approval without provider contact", async (t) => {
-  const dir = await fixture(t, { notion: { target: "koupa-docs", resource: "koupa-docs", account: "personal", connection_id: "koupa-notion", method: "mcp", status: "connected" } });
+// Firebase has no service address in mcp/services.json, so it stays fail-closed.
+test("Curated passthrough: a service with no address requires approval without provider contact", async (t) => {
+  const dir = await fixture(t, { firebase: { target: "koupa-fb", resource: "koupa-fb", account: "personal", connection_id: "koupa-firebase", method: "mcp", status: "connected" } });
   const log = [];
   const audits = [];
   const client = await session(t, dir, log, audits);
-  const res = await client.callTool({ name: "nexus_execute", arguments: { provider: "notion", operation: "search", arguments: {} } });
+  const res = await client.callTool({ name: "nexus_execute", arguments: { provider: "firebase", operation: "search", arguments: {} } });
   assert.equal(res.isError, true);
   assert.equal(body(res).decision, "approval_required");
   assert.equal(log.filter((i) => i.kind === "call").length, 0);
-  assert(audits.some((a) => a.provider === "notion" && a.decision === "approval_required"));
+  assert(audits.some((a) => a.provider === "firebase" && a.decision === "approval_required"));
   assert(!JSON.stringify(res).includes("fake-github-token"));
 });
 

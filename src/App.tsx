@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
-import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
+import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
@@ -477,6 +477,70 @@ function App() {
     throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
   }
 
+  // ---- Any other service on the launch list: sign in with its own remote MCP server ----
+
+  /** Sign in to a service, then save the binding. Rejects with a plain-language message; cancelling
+   *  or failing removes the pending binding and anything saved for it. */
+  async function connectRemoteService(provider: string, accountId: string | undefined, signal: AbortSignal): Promise<void> {
+    const url = remoteServiceUrl(provider);
+    if (!url) throw new Error(`${provider} cannot be connected this way yet.`);
+    if (!project) throw new Error("No project is selected. Select a project before connecting.");
+    if (!desktopAvailable()) throw new Error("Open the desktop app to connect a service.");
+    const owner = project;
+    const slug = serviceSlug(provider);
+    const name = PROVIDER_CATALOG.find((entry) => entry.provider.toLowerCase() === slug)?.provider ?? provider;
+    const accountEntry = accountId ? accountsRef.current.find((a) => a.id === accountId) : undefined;
+    const pending: Connection = {
+      id: makeId("connection"),
+      provider: name,
+      short: initialsFor(name),
+      target: name,
+      resource: name,
+      accountId: accountEntry?.id,
+      account: accountEntry?.label ?? accountEntry?.id,
+      environment: owner.environment ?? "development",
+      detail: "Whole account",
+      tone: "blue",
+      state: "Needs review",
+      method: "mcp",
+      authState: "pending",
+    };
+    setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: [...item.connections, pending] } : item));
+    const cleanUp = async () => {
+      await invoke("cancel_mcp_oauth").catch(() => undefined);
+      await removeMcpTokens(owner.id, pending.id, slug).catch(() => undefined);
+      setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: item.connections.filter((c) => c.id !== pending.id) } : item));
+    };
+    try {
+      const started = await invoke<{ authorization_url: string }>("start_mcp_oauth", { serverUrl: url, service: slug, projectId: owner.id, connectionId: pending.id }).catch((error) => {
+        throw new Error(githubText(error, `Could not start the ${name} sign-in. Try again.`));
+      });
+      await openUrl(started.authorization_url);
+      for (let attempt = 0; attempt < 860; attempt += 1) {
+        if (signal.aborted) { const cancelled = new Error(`The ${name} sign-in was cancelled.`); cancelled.name = "AbortError"; throw cancelled; }
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        const result = await invoke<{ success: boolean; error?: string | null } | null>("poll_mcp_oauth");
+        if (!result) continue;
+        if (!result.success) throw new Error(result.error || `${name} did not complete the sign-in. Try again.`);
+        const connected: Connection = { ...pending, authState: "connected" };
+        setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: item.connections.map((c) => c.id === pending.id ? connected : c) } : item));
+        setModal(null);
+        try {
+          const filePath = await syncNexusProjectFile(owner, connected, "connected");
+          setNotice(`${name} is connected${connected.account ? ` as “${connected.account}”` : ""}. ${filePath ? `Nexus wrote ${filePath}. ` : ""}It can read your whole ${name} account; anything that changes data needs your approval.`);
+        } catch (error) {
+          reportError(`Linking ${name}`, error, { kind: "link", projectId: owner.id, connectionId: pending.id });
+          setNotice("Connected, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity.");
+        }
+        return;
+      }
+      throw new Error(`The ${name} sign-in timed out. Start again and approve within a few minutes.`);
+    } catch (error) {
+      await cleanUp();
+      throw error;
+    }
+  }
+
   // ---- GitHub: the user approves Nexus with their own GitHub account (device flow) ----
   const [githubStatus, setGithubStatus] = useState<{ configured: boolean; install_url?: string | null }>({ configured: false });
   useEffect(() => {
@@ -927,7 +991,7 @@ function App() {
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} remote={{ available: desktopAvailable(), connect: connectRemoteService }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );

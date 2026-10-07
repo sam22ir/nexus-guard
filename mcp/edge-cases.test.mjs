@@ -436,27 +436,29 @@ test("edge: duplicate github entries block without provider call", async (t) => 
   assert.equal(log.length, 0);
 });
 
+// Algolia has no service address in mcp/services.json, so it stays on the old fail-closed path.
+// Services that do have one use the read-only rule instead (mcp/remote-service.test.mjs).
 test("edge: curated passthrough stays approval_required, never forwards (documented fail-closed)", async (t) => {
   const dir = await freshDir(t);
   await writeManifest(dir, {
     project: "Koupa", project_id: "koupa", environment: "development",
     connections: {
       supabase: validConn("koupa"),
-      resend: { target: "resend-acct", resource: "resend-acct", account: "personal", status: "connected" },
+      algolia: { target: "algolia-acct", resource: "algolia-acct", account: "personal", status: "connected" },
     },
   });
   const log = [];
   const client = await session(t, dir, log);
   const res = await client.callTool({
     name: "nexus_execute",
-    arguments: { provider: "resend", operation: "list_emails", arguments: {} },
+    arguments: { provider: "algolia", operation: "list_emails", arguments: {} },
   });
   assert.equal(body(res).decision, "approval_required");
   assert.equal(log.filter((x) => x.kind === "call").length, 0);
   // Cross-account curated request also blocks (not approval).
   const cross = await client.callTool({
     name: "nexus_request_access",
-    arguments: { provider: "resend", operation: "list_emails", account: "other" },
+    arguments: { provider: "algolia", operation: "list_emails", account: "other" },
   });
   assert.equal(body(cross).decision, "block");
 });

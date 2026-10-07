@@ -1,3 +1,4 @@
+import services from "../mcp/services.json";
 export type AccountAuthState = "not_connected" | "pending" | "connected";
 
 export type Account = {
@@ -149,7 +150,23 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   { provider: "Pinecone", tier: "curated", tags: ["Vectors", "Database"], mcp: null },
   // CMS
   { provider: "Sanity", tier: "curated", tags: ["CMS"], mcp: null },
+  { provider: "Webflow", tier: "curated", tags: ["CMS", "Hosting"], mcp: null },
+  // Data / automation
+  { provider: "Airtable", tier: "curated", tags: ["Database"], mcp: null },
+  { provider: "Zapier", tier: "curated", tags: ["Automation"], mcp: null },
 ];
+
+/** Services Nexus can sign in to with one generic flow (mcp/services.json):
+ *  the service's own remote MCP address, or null. Supabase and GitHub have their own flows. */
+export function remoteServiceUrl(provider: string): string | null {
+  const entry = (services as Record<string, { mcpUrl?: string } | string>)[provider.trim().toLowerCase()];
+  return entry && typeof entry === "object" && typeof entry.mcpUrl === "string" ? entry.mcpUrl : null;
+}
+
+/** The lowercase slug used for this service's keychain entries and manifest key. */
+export function serviceSlug(provider: string): string {
+  return provider.trim().toLowerCase();
+}
 
 /** Spacing/punctuation-insensitive key for provider-name comparison
  *  ("Google Drive" === "GoogleDrive", "Hugging Face" === "HuggingFace"). */
