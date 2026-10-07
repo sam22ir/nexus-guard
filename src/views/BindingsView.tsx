@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../vault";
-import { tierForProvider, remoteServiceUrl, type Account, type Connection, type Project } from "../store";
+import { tierForProvider, remoteServiceUrl, remoteServiceScope, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey } from "../accounts";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
@@ -135,6 +135,31 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
     invoke<boolean>("get_write_grant", { projectId: project.id, connectionId: connection.id }).then((on) => { if (!cancelled) setWritesOn(on); }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [connection.id, project.id, isRemote]);
+  // Limit this binding to one project / site / base, for services that name one.
+  const scopeSpec = isRemote ? remoteServiceScope(connection.provider) : null;
+  const [limit, setLimit] = useState<string | null>(null);
+  const [limitDraft, setLimitDraft] = useState("");
+  const [limitBusy, setLimitBusy] = useState(false);
+  const [limitError, setLimitError] = useState("");
+  useEffect(() => {
+    setLimit(null); setLimitDraft(""); setLimitError("");
+    if (!scopeSpec || !desktopAvailable()) return;
+    let cancelled = false;
+    invoke<string | null>("get_binding_scope", { projectId: project.id, connectionId: connection.id }).then((value) => { if (!cancelled) { setLimit(value); setLimitDraft(value ?? ""); } }).catch(() => undefined);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.id, project.id, isRemote]);
+  async function saveLimit(value: string | null) {
+    setLimitBusy(true); setLimitError("");
+    try {
+      await invoke("set_binding_scope", { projectId: project.id, connectionId: connection.id, value });
+      setLimit(value); setLimitDraft(value ?? "");
+    } catch (error) {
+      setLimitError(typeof error === "string" && error ? error : "Could not save this setting. Try again.");
+    } finally {
+      setLimitBusy(false);
+    }
+  }
   async function toggleWrites() {
     const next = !writesOn;
     if (next && !window.confirm(`Let agents make changes in ${connection.provider}?\n\nOnly actions ${connection.provider} labels as safe, non-destructive changes will run. Anything that deletes or may be destructive, and anything in production, is still refused.\n\nYou can switch this off at any time.`)) return;
@@ -278,6 +303,25 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
                 <span className="nx-row-sub" style={test ? { color: test.ok ? "var(--green)" : "var(--red)", whiteSpace: "normal" } : undefined}>{test ? test.text : "Ask Supabase for this project through Nexus."}</span>
               </span>
               <Button size="sm" variant="outline" isDisabled={testing || !desktopAvailable()} onPress={() => void runTest()}>{testing ? "Testing…" : "Test"}</Button>
+            </div>
+          )}
+          {isRemote && connected && scopeSpec && (
+            <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0, alignItems: "flex-start" }}>
+              <span className="nx-tile"><NxIcon name="folder" size={16} /></span>
+              <span className="nx-row-body">
+                <span className="nx-row-title">Limit to one {scopeSpec.label}</span>
+                <span className="nx-row-sub" style={{ whiteSpace: "normal", ...(limitError ? { color: "var(--red)" } : {}) }}>
+                  {limitError || (limit
+                    ? `Limited to ${scopeSpec.label} “${limit}”. Tools that cannot be limited to a ${scopeSpec.label} are refused.`
+                    : `Not limited: agents can reach every ${scopeSpec.label} in this ${connection.provider} account.`)}
+                  {!scopeSpec.verified && " Not yet checked against a live sign-in, so some tools may be refused until it is."}
+                </span>
+                <span className="mt-1.5 flex gap-2">
+                  <input value={limitDraft} onChange={(e) => setLimitDraft(e.target.value)} placeholder={`${scopeSpec.label} name or id`} aria-label={`Limit to one ${scopeSpec.label}`} className={`${inputClass} nx-mono`} />
+                  <Button size="sm" isDisabled={limitBusy || !desktopAvailable() || !limitDraft.trim() || limitDraft.trim() === (limit ?? "")} onPress={() => void saveLimit(limitDraft.trim())}>{limitBusy ? "Saving…" : "Save"}</Button>
+                  {limit && <Button size="sm" variant="outline" isDisabled={limitBusy} onPress={() => void saveLimit(null)}>Remove limit</Button>}
+                </span>
+              </span>
             </div>
           )}
           {isRemote && connected && (

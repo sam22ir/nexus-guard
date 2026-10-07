@@ -163,6 +163,13 @@ export function remoteServiceUrl(provider: string): string | null {
   return entry && typeof entry === "object" && typeof entry.mcpUrl === "string" ? entry.mcpUrl : null;
 }
 
+/** How this service names the one resource a binding can be limited to, or null (whole account only). */
+export function remoteServiceScope(provider: string): { label: string; verified: boolean } | null {
+  const entry = (services as Record<string, { scope?: { label?: string; args?: string[]; verified?: boolean } } | string>)[provider.trim().toLowerCase()];
+  const scope = entry && typeof entry === "object" ? entry.scope : undefined;
+  return scope && Array.isArray(scope.args) && scope.args.length > 0 ? { label: scope.label || "resource", verified: scope.verified === true } : null;
+}
+
 /** The lowercase slug used for this service's keychain entries and manifest key. */
 export function serviceSlug(provider: string): string {
   return provider.trim().toLowerCase();

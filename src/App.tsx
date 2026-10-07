@@ -293,6 +293,8 @@ function App() {
     for (const connection of target.connections) {
       await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
       await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
+      await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
+    await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
     }
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);

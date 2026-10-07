@@ -80,6 +80,20 @@ What the engine does for you:
 - **Renewal:** `nexus-keyring` renews an expiring sign-in with the client Nexus registered, before the server uses it.
 - **Isolation:** the signed-in account, not one resource. The dialog says so.
 
+### Limiting a binding to one resource
+
+By default a signed-in service covers the whole account. For services whose
+tools take a resource argument, a binding can be limited to one project, site or
+base, and the limit is generic: it is data, not code.
+
+- **Data:** a `scope` row in `mcp/services.json` names the argument(s) the service's tools use for the resource, for example `{ "label": "project", "args": ["projectId", "project_id"], "verified": false }`.
+- **Setting it:** Project → Bindings → the service → "Limit to one project". The value is saved in the app's own config folder (`binding-scopes.json`), never in the project folder, so an agent cannot widen it.
+- **Enforcement, on every call:** Nexus reads the tool's own input schema. A tool that takes the argument gets the bound value forced in; naming a different value is refused; a tool that cannot be limited (an account-wide list or search) is refused. Only top-level arguments are checked.
+- **Wrong data fails safe:** a wrong argument name makes the limit refuse more tools, never fewer.
+- **Checking a new row:** sign in to the service, run `list_tools` through Nexus, and read `limitable` on each tool. Fix the argument names until the tools you expect are limitable, then set `verified` to true.
+
+All rows are `verified: false` until each service has been signed in to.
+
 Known limits: a service with a narrow read scope may expose fewer tools (Sentry
 advertises only `org:read` as a read scope); a service that restricts which
 clients may connect (Vercel, Figma) will refuse registration until Nexus is

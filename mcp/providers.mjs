@@ -131,6 +131,18 @@ export function isCostBearing(provider, _operation) {
   return false;
 }
 
+/**
+ * How a service names the resource a call is about, if it does at all
+ * (mcp/services.json "scope": { label, args }). Null means the service can only
+ * be limited to the whole signed-in account.
+ */
+export function serviceScopeSpec(provider) {
+  const entry = services[normalizeProvider(provider)];
+  const scope = entry && typeof entry === "object" ? entry.scope : null;
+  if (!scope || typeof scope !== "object" || !Array.isArray(scope.args) || scope.args.length === 0) return null;
+  return { label: typeof scope.label === "string" && scope.label ? scope.label : "resource", args: scope.args.filter((a) => typeof a === "string" && a) };
+}
+
 /** The remote MCP address Nexus signs in to for this service, or null when it has none. */
 export function serviceMcpUrl(provider) {
   const entry = services[normalizeProvider(provider)];
@@ -175,4 +187,37 @@ export function remoteToolDecision(tool, { allowWrites = false, environment } = 
     reason: "This tool may delete or change data in ways that cannot be undone, or does not say. It needs developer approval and was not run.",
     kind,
   };
+}
+
+const sameResource = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
+/** The argument this tool uses for the resource, read from its own input schema, or null. */
+export function scopeArgOf(tool, spec) {
+  const properties = tool?.inputSchema?.properties;
+  if (!spec || !properties || typeof properties !== "object") return null;
+  return spec.args.find((name) => Object.prototype.hasOwnProperty.call(properties, name)) ?? null;
+}
+
+/**
+ * Hold one call to the resource its binding is limited to.
+ *  - No spec or no bound value: the binding is account-wide, nothing changes.
+ *  - A tool with no argument for the resource cannot be limited, so it is refused
+ *    (an account-wide list or search would leak the other resources).
+ *  - A resource argument that names something else is refused.
+ *  - A missing one is filled in with the bound value.
+ * Only top-level arguments are checked.
+ */
+export function applyResourceScope({ tool, spec, bound, args }) {
+  if (!spec || bound == null || bound === "") return { ok: true, args: args ?? {} };
+  const argName = scopeArgOf(tool, spec);
+  if (!argName) {
+    return { ok: false, reason: `This binding is limited to one ${spec.label} ('${bound}'), and this tool cannot be limited to a ${spec.label}. It was not run.` };
+  }
+  const given = args && typeof args === "object" ? args : {};
+  for (const name of spec.args) {
+    if (Object.prototype.hasOwnProperty.call(given, name) && !sameResource(given[name], bound)) {
+      return { ok: false, reason: `This binding is limited to ${spec.label} '${bound}'. Use that, or leave '${name}' out. It was not run.` };
+    }
+  }
+  return { ok: true, args: { ...given, [argName]: bound } };
 }

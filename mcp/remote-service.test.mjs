@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { makeNexusServer } from "./nexus-server.mjs";
-import { remoteToolDecision, remoteToolKind, serviceMcpUrl } from "./providers.mjs";
+import { applyResourceScope, remoteToolDecision, remoteToolKind, scopeArgOf, serviceMcpUrl, serviceScopeSpec } from "./providers.mjs";
+import { readBindingScope } from "./binding-scopes.mjs";
 import { readWriteGrant } from "./write-grants.mjs";
 
 const tools = [
@@ -27,7 +28,7 @@ async function fixture(t, connections) {
   return dir;
 }
 
-async function session(t, dir, log = [], audits = [], grants = {}) {
+async function session(t, dir, log = [], audits = [], grants = {}, extra = {}) {
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
   const server = makeNexusServer({
     workspace: dir,
@@ -37,13 +38,14 @@ async function session(t, dir, log = [], audits = [], grants = {}) {
     connectRemoteProvider: async (url, token) => {
       log.push({ kind: "connect", url, token });
       return {
-        listTools: async () => ({ tools }),
+        listTools: async () => ({ tools: extra.tools ?? tools }),
         callTool: async ({ name, arguments: args }) => { log.push({ kind: "call", name, args }); return { content: [{ type: "text", text: JSON.stringify({ ok: name }) }] }; },
         close: async () => {},
       };
     },
     getWriteGrant: async (projectId, connectionId) => grants[`${projectId}:${connectionId}`] === true,
     onAudit: (entry) => audits.push(entry),
+    ...(extra.server ?? {}),
   });
   const client = new Client({ name: "test", version: "1.0.0" }, { capabilities: {} });
   await server.connect(serverSide);
@@ -227,4 +229,138 @@ test("write grants: the project folder cannot grant itself writes", async (t) =>
   const client = await session(t, dir, log);
   assert.equal((await exec(client, "linear", "add_comment")).isError, true);
   assert.equal(log.filter((i) => i.kind === "call").length, 0);
+});
+
+// ---- Limiting a binding to one resource (one project, site, base…) ----
+
+const spec = { label: "project", args: ["projectId", "project_id"] };
+const projectTool = (name, annotations, extraProps = {}) => ({ name, description: name, inputSchema: { type: "object", properties: { projectId: { type: "string" }, ...extraProps } }, annotations });
+const scopeTools = [
+  projectTool("describe_project", { readOnlyHint: true }),
+  projectTool("add_note", { readOnlyHint: false, destructiveHint: false }, { note: { type: "string" } }),
+  { name: "list_projects", description: "Everything in the account", inputSchema: { type: "object", properties: { query: { type: "string" } } }, annotations: { readOnlyHint: true } },
+];
+const scoped = (bound) => ({ tools: scopeTools, server: { getServiceScopeSpec: () => spec, getBindingScope: async () => bound } });
+
+test("limit rules: the tool's own schema says whether it can be limited", () => {
+  assert.equal(scopeArgOf(scopeTools[0], spec), "projectId");
+  assert.equal(scopeArgOf(scopeTools[2], spec), null);
+  assert.equal(scopeArgOf({ inputSchema: { properties: { project_id: {} } } }, spec), "project_id");
+  assert.equal(scopeArgOf({}, spec), null);
+  assert.equal(scopeArgOf(scopeTools[0], null), null);
+});
+
+test("limit rules: wrong resource refused, missing one filled in, same one kept, account-wide tools refused", () => {
+  const t = scopeTools[0];
+  assert.deepEqual(applyResourceScope({ tool: t, spec, bound: "p1", args: {} }), { ok: true, args: { projectId: "p1" } });
+  assert.deepEqual(applyResourceScope({ tool: t, spec, bound: "p1", args: { projectId: " P1 ", other: 1 } }), { ok: true, args: { projectId: "p1", other: 1 } });
+  const wrong = applyResourceScope({ tool: t, spec, bound: "p1", args: { projectId: "p2" } });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.reason, /limited to project 'p1'/);
+  // Either spelling of the argument is checked, even when the tool only declares one.
+  assert.equal(applyResourceScope({ tool: t, spec, bound: "p1", args: { project_id: "p2" } }).ok, false);
+  assert.equal(applyResourceScope({ tool: t, spec, bound: "p1", args: { projectId: "p1", project_id: "p2" } }).ok, false);
+  const wide = applyResourceScope({ tool: scopeTools[2], spec, bound: "p1", args: {} });
+  assert.equal(wide.ok, false);
+  assert.match(wide.reason, /cannot be limited/);
+  // Not limited: nothing changes.
+  const args = { projectId: "anything" };
+  assert.deepEqual(applyResourceScope({ tool: scopeTools[2], spec, bound: null, args }), { ok: true, args });
+  assert.deepEqual(applyResourceScope({ tool: scopeTools[2], spec: null, bound: "p1", args }), { ok: true, args });
+});
+
+test("limited binding: the bound project is forced on, a different one never reaches the service", async (t) => {
+  const dir = await fixture(t, { linear: connection });
+  const log = [];
+  const client = await session(t, dir, log, [], {}, scoped("p1"));
+  assert.notEqual((await exec(client, "linear", "describe_project", {})).isError, true);
+  assert.deepEqual(log.filter((i) => i.kind === "call").map((c) => c.args), [{ projectId: "p1" }], "the project was filled in");
+  const other = await exec(client, "linear", "describe_project", { projectId: "p2" });
+  assert.equal(other.isError, true);
+  assert.match(other.content[0].text, /limited to project 'p1'/);
+  assert.equal(log.filter((i) => i.kind === "call").length, 1, "the wrong project was never sent");
+});
+
+test("limited binding: an account-wide tool is refused, so nothing leaks around the limit", async (t) => {
+  const dir = await fixture(t, { linear: connection });
+  const log = [];
+  const client = await session(t, dir, log, [], {}, scoped("p1"));
+  const res = await exec(client, "linear", "list_projects", {});
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /cannot be limited/);
+  assert.equal(log.filter((i) => i.kind === "call").length, 0);
+});
+
+test("limited binding: not limited means today's behaviour, account-wide tools still run", async (t) => {
+  const dir = await fixture(t, { linear: connection });
+  const log = [];
+  const client = await session(t, dir, log, [], {}, scoped(null));
+  assert.notEqual((await exec(client, "linear", "list_projects", {})).isError, true);
+  assert.deepEqual(log.find((i) => i.kind === "call").args, {});
+});
+
+test("limited binding: a safe write is limited too, and still needs the writes switch", async (t) => {
+  const dir = await fixture(t, { linear: connection });
+  const log = [];
+  const off = await session(t, dir, log, [], {}, scoped("p1"));
+  assert.equal((await exec(off, "linear", "add_note", { note: "x" })).isError, true);
+  assert.equal(log.filter((i) => i.kind === "call").length, 0);
+  const log2 = [];
+  const on = await session(t, dir, log2, [], { "koupa:koupa-ln": true }, scoped("p1"));
+  assert.notEqual((await exec(on, "linear", "add_note", { note: "x" })).isError, true);
+  assert.deepEqual(log2.find((i) => i.kind === "call").args, { note: "x", projectId: "p1" });
+  assert.equal((await exec(on, "linear", "add_note", { note: "x", projectId: "p2" })).isError, true);
+  assert.equal(log2.filter((i) => i.kind === "call").length, 1);
+});
+
+test("limited binding: list_tools says what the limit is and which tools can be limited", async (t) => {
+  const dir = await fixture(t, { linear: connection });
+  const client = await session(t, dir, [], [], {}, scoped("p1"));
+  const listed = JSON.parse((await exec(client, "linear", "list_tools")).content[0].text);
+  assert.deepEqual(listed.limited_to, { project: "p1" });
+  assert.deepEqual(Object.fromEntries(listed.tools.map((x) => [x.name, x.limitable])), { describe_project: true, add_note: true, list_projects: false });
+  const open = JSON.parse((await exec(await session(t, dir, [], [], {}, scoped(null)), "linear", "list_tools")).content[0].text);
+  assert.equal(open.limited_to, undefined, "no limit set");
+  assert.equal(open.can_be_limited_to, "project");
+  assert.equal(open.tools[0].limitable, true, "still reported, so a new service's data can be checked before any limit is set");
+  assert.equal(open.tools[2].limitable, false);
+  // A service with no scope row reports nothing about limits.
+  const none = JSON.parse((await exec(await session(t, dir, [], [], {}, { tools: scopeTools, server: { getServiceScopeSpec: () => null } }), "linear", "list_tools")).content[0].text);
+  assert.equal(none.can_be_limited_to, undefined);
+  assert.equal(none.tools[0].limitable, undefined);
+});
+
+test("limit file: read from the app's own config, anything unclear means no limit set", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-scopes-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "binding-scopes.json");
+  assert.equal(await readBindingScope("koupa", "koupa-ln", file), null, "missing file");
+  await fs.writeFile(file, "not json");
+  assert.equal(await readBindingScope("koupa", "koupa-ln", file), null, "damaged file");
+  await fs.writeFile(file, JSON.stringify({ scopes: { "koupa:koupa-ln": " p1 ", "koupa:blank": "  ", "koupa:num": 5 } }));
+  assert.equal(await readBindingScope("koupa", "koupa-ln", file), "p1");
+  assert.equal(await readBindingScope("koupa", "blank", file), null);
+  assert.equal(await readBindingScope("koupa", "num", file), null);
+  assert.equal(await readBindingScope("", "koupa-ln", file), null);
+});
+
+test("limit: the project folder cannot widen or set it", async (t) => {
+  const dir = await fixture(t, { linear: { ...connection, scope: "p9", resource_scope: "p9" } });
+  await fs.writeFile(path.join(dir, ".nexus", "binding-scopes.json"), JSON.stringify({ scopes: { "koupa:koupa-ln": "p9" } }));
+  const log = [];
+  const client = await session(t, dir, log, [], {}, { tools: scopeTools, server: { getServiceScopeSpec: () => spec } });
+  // The server reads the app's file (empty in this test), not the workspace: no limit applies.
+  assert.notEqual((await exec(client, "linear", "list_projects", {})).isError, true);
+  assert.deepEqual(log.find((i) => i.kind === "call").args, {});
+});
+
+test("service list: scope rows are well formed, and unknown services have none", () => {
+  const withScope = ["neon", "vercel", "sentry", "netlify", "airtable", "railway", "sanity", "gitlab", "webflow", "cloudflare"];
+  for (const name of withScope) {
+    const found = serviceScopeSpec(name);
+    assert(found, name);
+    assert(found.label && found.args.length > 0, name);
+  }
+  assert.equal(serviceScopeSpec("notion"), null);
+  assert.equal(serviceScopeSpec("nothing-here"), null);
 });

@@ -2799,6 +2799,74 @@ fn set_write_grant(project_id: String, connection_id: String, allowed: bool) -> 
     set_grant_at(&write_grants_path(), &key, allowed)
 }
 
+// ---- Limiting a binding to one resource (one project, site, base…) ----
+// Kept in the app's own config folder like the write switch, so an agent cannot
+// widen it. The Nexus server reads the same file (mcp/binding-scopes.mjs).
+
+fn binding_scopes_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_BINDING_SCOPES_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/binding-scopes.json")
+}
+
+fn read_scopes(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("scopes").and_then(|s| s.as_object().cloned()))
+        .unwrap_or_default()
+}
+
+/// A value is one resource name or id: short, one line, no control characters.
+fn clean_scope_value(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 200 || trimmed.chars().any(|c| c.is_control()) {
+        return Err("Enter one name or id, up to 200 characters on a single line.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn set_scope_at(path: &std::path::Path, key: &str, value: Option<&str>) -> Result<(), String> {
+    let mut scopes = read_scopes(path);
+    match value {
+        Some(value) => {
+            scopes.insert(key.to_string(), serde_json::Value::String(clean_scope_value(value)?));
+        }
+        None => {
+            scopes.remove(key);
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "scopes": scopes })).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this setting.".to_string())
+}
+
+#[tauri::command]
+fn get_binding_scope(project_id: String, connection_id: String) -> Result<Option<String>, String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    Ok(read_scopes(&binding_scopes_path()).get(&key).and_then(|v| v.as_str()).map(str::to_string))
+}
+
+/// `value: None` removes the limit (the binding covers the whole account again).
+#[tauri::command]
+fn set_binding_scope(project_id: String, connection_id: String, value: Option<String>) -> Result<(), String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    set_scope_at(&binding_scopes_path(), &key, value.as_deref())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2860,7 +2928,9 @@ pub fn run() {
             poll_mcp_oauth,
             cancel_mcp_oauth,
             get_write_grant,
-            set_write_grant
+            set_write_grant,
+            get_binding_scope,
+            set_binding_scope
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");
@@ -2885,6 +2955,26 @@ mod agent_setup_tests {
         assert_eq!(read_grants(&path).get("koupa:other").and_then(|v| v.as_bool()), Some(true), "turning one off leaves the others");
         fs::write(&path, "garbage").unwrap();
         assert!(read_grants(&path).is_empty(), "a damaged file means no grants");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_binding_limit_round_trips_stays_per_binding_and_rejects_junk() {
+        let dir = std::env::temp_dir().join(format!("nexus-scopes-test-{}", std::process::id()));
+        let path = dir.join("binding-scopes.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_scopes(&path).is_empty());
+        set_scope_at(&path, "koupa:koupa-ln", Some("  proj-1 ")).unwrap();
+        set_scope_at(&path, "koupa:other", Some("proj-2")).unwrap();
+        assert_eq!(read_scopes(&path).get("koupa:koupa-ln").and_then(|v| v.as_str()), Some("proj-1"), "trimmed");
+        set_scope_at(&path, "koupa:koupa-ln", None).unwrap();
+        assert!(read_scopes(&path).get("koupa:koupa-ln").is_none());
+        assert_eq!(read_scopes(&path).get("koupa:other").and_then(|v| v.as_str()), Some("proj-2"));
+        assert!(set_scope_at(&path, "k:c", Some("   ")).is_err());
+        assert!(set_scope_at(&path, "k:c", Some("a\nb")).is_err());
+        assert!(set_scope_at(&path, "k:c", Some(&"x".repeat(201))).is_err());
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_scopes(&path).is_empty(), "a damaged file means no limit");
         let _ = fs::remove_dir_all(&dir);
     }
 

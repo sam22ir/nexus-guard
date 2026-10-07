@@ -15,8 +15,9 @@ import { classify, decideGuard, resolveOverride } from "./guard-policy.mjs";
 // guard-policy (decideGuard/resolveOverride) + costBearing/escapeHatch axes are
 // paid-tier only. MVP routing is read-allow/block via decideExecute below with
 // GUARD_ENABLED=false. Enforcement in guard-policy.mjs is kept, never deleted.
-import { curatedDecision, isReadTool, normalizeProvider, providerTier, serviceMcpUrl, remoteToolDecision, remoteToolKind } from "./providers.mjs";
+import { curatedDecision, isReadTool, normalizeProvider, providerTier, serviceMcpUrl, remoteToolDecision, remoteToolKind, serviceScopeSpec, scopeArgOf, applyResourceScope } from "./providers.mjs";
 import { readWriteGrant } from "./write-grants.mjs";
+import { readBindingScope } from "./binding-scopes.mjs";
 
 // Phase 1 (Guard hide, MVP): Guard extras (overrides, cost axis, escape hatch)
 // are OFF unless GUARD_ENABLED=1/true. Routing enforcement (read-allow/block)
@@ -676,7 +677,7 @@ export function pickWorkspaceFromRoots(roots) {
 }
 
 /** Directly relays upstream tool definitions and calls, rather than reimplementing provider tools. */
-export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, getWriteGrant, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
+export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, getWriteGrant, getBindingScope, getServiceScopeSpec, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
   const server = new Server({ name: "nexus-guard", version: "0.3.0" }, { capabilities: { tools: { listChanged: false } } });
   const dependencies = { getToken, connectProvider, refreshToken };
   const githubDeps = {
@@ -688,6 +689,8 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
     getToken: getRemoteToken ?? ((provider, projectId, connectionId) => readProviderToken(provider, projectId, connectionId)),
     connect: connectRemoteProvider ?? connectRemoteMcp,
     writeGrant: getWriteGrant ?? ((projectId, connectionId) => readWriteGrant(projectId, connectionId)),
+    scopeSpec: getServiceScopeSpec ?? serviceScopeSpec,
+    scope: getBindingScope ?? ((projectId, connectionId) => readBindingScope(projectId, connectionId)),
   };
   // `workspace: null` defers binding to the client's MCP roots (paper §7/§10):
   // used only when no explicit workspace was supplied. Once bound it never
@@ -901,9 +904,16 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
       provider = await remoteDeps.connect(url, token);
       const listed = await provider.listTools();
       const tools = Array.isArray(listed?.tools) ? listed.tools : [];
+      const spec = remoteDeps.scopeSpec(providerName);
+      const bound = spec ? await remoteDeps.scope(context.project_id, connection.connection_id) : null;
       if (operation === "list_tools") {
         await log("allow", null);
-        return jsonResult({ provider: providerName, tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", kind: remoteToolKind(t), read_only: remoteToolKind(t) === "read" })) });
+        return jsonResult({
+          provider: providerName,
+          ...(spec ? { can_be_limited_to: spec.label } : {}),
+          ...(bound ? { limited_to: { [spec.label]: bound } } : {}),
+          tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", kind: remoteToolKind(t), read_only: remoteToolKind(t) === "read", ...(spec ? { limitable: scopeArgOf(t, spec) !== null } : {}) })),
+        });
       }
       const tool = tools.find((t) => t.name === operation);
       if (!tool) {
@@ -917,7 +927,12 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
         await log("approval_required", policy.reason);
         return decisionResult("approval_required", { reason: policy.reason, operation, kind: policy.kind }, true);
       }
-      const result = await provider.callTool({ name: operation, arguments: args ?? {} }, undefined, { timeout: 20_000 });
+      const scoped = applyResourceScope({ tool, spec, bound, args });
+      if (!scoped.ok) {
+        await log("block", "outside this binding's limit");
+        return blocked(scoped.reason, { operation });
+      }
+      const result = await provider.callTool({ name: operation, arguments: scoped.args }, undefined, { timeout: 20_000 });
       await log("allow", policy.reason);
       return result;
     } catch (error) {
