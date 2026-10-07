@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { GithubConnectPanel, type GithubApi } from "./GithubConnectPanel";
 import { tierForProvider, PROVIDER_CATALOG, type Account, type Connection, type Project } from "../store";
 import { Button } from "@heroui/react";
 import { Segmented } from "../ui";
@@ -17,7 +18,7 @@ function defaultsFor(provider: string): { detail: string; tone: Connection["tone
 
 /** Bind one account and resource to a project. Supabase defaults to browser
  *  approval then a project pick; every other service is a short manual form. */
-export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
+export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
   projectId: string;
   projectName: string;
   environment?: string;
@@ -29,13 +30,15 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   onSave: (input: SaveInput) => void;
   /** Link a new account on the spot and return its id. */
   onCreateAccount: (input: { provider: string; label: string }) => string;
+  /** Connect the user's own GitHub account (device flow). */
+  github: GithubApi;
   onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: PickedProject[]; listError?: string }>;
   onConfirmMcp: (projectId: string, connectionId: string, choice: PickedProject) => void;
   onCancelMcp: (projectId: string, connectionId: string) => void;
   onAbortMcp: () => void;
 }) {
   const [provider, setProvider] = useState(initialProvider ?? "Supabase");
-  const [method, setMethod] = useState<"manual" | "mcp">((initialProvider ?? "Supabase") === "Supabase" ? "mcp" : "manual");
+  const [method, setMethod] = useState<"manual" | "mcp">(() => { const first = initialProvider ?? "Supabase"; return first === "Supabase" || (first === "GitHub" && github.configured) ? "mcp" : "manual"; });
   const [target, setTarget] = useState("");
   const [projectRef, setProjectRef] = useState("");
   const [url, setUrl] = useState("");
@@ -73,6 +76,8 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   }, [accounts, provider]);
 
   const isSupabase = provider === "Supabase";
+  const isGithub = provider === "GitHub";
+  const githubBrowser = isGithub && github.configured;
   const providerTier = provider.trim() ? tierForProvider(provider) : "self-added";
   const [selfAddedConfirm, setSelfAddedConfirm] = useState(false);
   useEffect(() => { setSelfAddedConfirm(false); }, [provider]);
@@ -82,12 +87,12 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   const canSaveManual = provider.trim().length > 0 && target.trim().length > 0 && (!isSupabase || (projectRef.trim().length > 0 && url.trim().length > 0)) && (providerTier !== "self-added" || selfAddedConfirm);
   const picking = method === "mcp" && mcpPhase === "pick";
   // Browser approval proves which Supabase account this is, so there is nothing to choose up front.
-  const accountFromApproval = isSupabase && method === "mcp";
+  const accountFromApproval = (isSupabase || githubBrowser) && method === "mcp";
   const services = Array.from(new Set([...PROVIDER_CATALOG.map((p) => p.provider), ...accounts.map((a) => a.provider), "Other"]));
 
   function changeProvider(next: string) {
     setProvider(next);
-    setMethod(next === "Supabase" ? "mcp" : "manual");
+    setMethod(next === "Supabase" || (next === "GitHub" && github.configured) ? "mcp" : "manual");
     setMcpPhase("auth");
     setError("");
     setAccountId(accounts.find((a) => a.provider.toLowerCase() === next.toLowerCase())?.id ?? NEW_ACCOUNT);
@@ -150,7 +155,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
     onConfirmMcp(projectId, mcpConnectionId, choice);
   }
 
-  const onModalClose = method === "mcp" ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
+  const onModalClose = method === "mcp" && !githubBrowser ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
   const canConfirmPick = !busy && (manualEntry || pickedRef.startsWith("manual:") ? projectRef.trim().length > 0 && target.trim().length > 0 : pickedRef.length > 0);
   const env = environment ?? "development";
 
@@ -195,11 +200,11 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
           </>
         )}
 
-        {isSupabase && !picking && (
+        {(isSupabase || githubBrowser) && !picking && (
           <Segmented label="How to connect" value={method} onChange={(value) => { setMethod(value); setError(""); }} options={[{ value: "mcp", label: "Browser approval" }, { value: "manual", label: "Enter details" }]} />
         )}
 
-        {method === "mcp" && mcpPhase === "auth" && (
+        {method === "mcp" && isSupabase && mcpPhase === "auth" && (
           <div className="rounded-[12px] border border-(--line) px-3.5 py-3 text-[12.5px] leading-[1.7] text-(--muted)">
             <p className="text-(--text)">Nexus opens Supabase in your browser.</p>
             <ol className="mt-1 list-decimal pl-5">
@@ -265,10 +270,12 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
           </>
         )}
 
-        {!picking && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
+        {githubBrowser && method === "mcp" && <GithubConnectPanel github={github} projectId={projectId} onDiscard={(connectionId) => onCancelMcp(projectId, connectionId)} onClose={onClose} />}
+
+        {!picking && !(githubBrowser && method === "mcp") && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
         {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
 
-        <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
+        {!(githubBrowser && method === "mcp") && <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
           {picking ? (
             <>
               <Button size="sm" variant="outline" isDisabled={busy} onPress={cancelAuthorize}>Cancel</Button>
@@ -285,7 +292,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
               <Button size="sm" isDisabled={!canSaveManual || busy} onPress={saveManual}>Add binding</Button>
             </>
           )}
-        </div>
+        </div>}
       </div>
     </Modal>
   );

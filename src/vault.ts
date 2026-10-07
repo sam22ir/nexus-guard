@@ -45,8 +45,8 @@ function key(projectId: string, connectionId: string): string {
   return `supabase-publishable:${projectId}:${connectionId}`;
 }
 
-function mcpKey(projectId: string, connectionId: string): string {
-  return `mcp:supabase:${projectId}:${connectionId}`;
+function mcpKey(projectId: string, connectionId: string, provider = "supabase"): string {
+  return `mcp:${provider.toLowerCase()}:${projectId}:${connectionId}`;
 }
 
 export async function hasPublishableKey(projectId: string, connectionId: string): Promise<boolean> {
@@ -73,8 +73,8 @@ export async function saveMcpTokens(projectId: string, connectionId: string, tok
   await invoke("vault_save_secret", { key: mcpKey(projectId, connectionId), value: JSON.stringify(tokens) });
 }
 
-export async function removeMcpTokens(projectId: string, connectionId: string): Promise<void> {
-  await invoke("vault_delete_secret", { key: mcpKey(projectId, connectionId) });
+export async function removeMcpTokens(projectId: string, connectionId: string, provider = "supabase"): Promise<void> {
+  await invoke("vault_delete_secret", { key: mcpKey(projectId, connectionId, provider) });
 }
 
 export type SupabaseProjectChoice = { ref: string; name: string; region?: string | null; organization_id?: string | null; organization_name?: string | null };

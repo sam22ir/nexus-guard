@@ -10,7 +10,7 @@ import { Icon as NxIcon } from "../ui";
 import { inputClass } from "../app/styles";
 
 const STEPS = ["Project", "Agent", "See it work"] as const;
-const SERVICES = ["Supabase", "GitHub"] as const;
+const ALL_SERVICES = ["Supabase", "GitHub"] as const;
 const FALLBACK_AGENTS = [
   { id: "claude", name: "Claude Code" },
   { id: "codex", name: "Codex" },
@@ -42,7 +42,10 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
   const [registeredId, setRegisteredId] = useState<string | null>(resumeProject?.id ?? null);
   const [existing, setExisting] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [service, setService] = useState<(typeof SERVICES)[number]>("Supabase");
+  const [service, setService] = useState<(typeof ALL_SERVICES)[number]>("Supabase");
+  // GitHub only connects when this build has the Nexus GitHub App set up; otherwise hide it so nobody hits a dead end.
+  const [githubReady, setGithubReady] = useState(false);
+  const SERVICES = githubReady ? ALL_SERVICES : ALL_SERVICES.filter((s) => s !== "GitHub");
   const [agents, setAgents] = useState<{ id: string; name: string }[]>(FALLBACK_AGENTS);
   const [agentsFound, setAgentsFound] = useState(false);
   const [agentId, setAgentId] = useState<string | null>(FALLBACK_AGENTS[0].id);
@@ -101,6 +104,10 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
     }
   }
   useEffect(() => { void ensureServer(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!desktop) return;
+    invoke<{ configured: boolean }>("github_status").then((status) => setGithubReady(status.configured)).catch(() => undefined);
+  }, [desktop]);
 
   // Preselect the first agent found on this machine so the common case is one click.
   useEffect(() => {

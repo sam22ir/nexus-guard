@@ -1,5 +1,10 @@
 use std::env;
 
+// Shared with the desktop app: GitHub token parsing and refresh.
+#[allow(dead_code)]
+#[path = "../github_auth.rs"]
+mod github_auth;
+
 const SERVICE: &str = "com.nexusguard.app";
 
 /// Providers whose approvals the Nexus server may read back. Each is stored by
@@ -23,6 +28,28 @@ fn keychain_key(args: &[String]) -> Option<String> {
     Some(format!("mcp:{}:{}:{}", args[0], args[1], args[2]))
 }
 
+/// GitHub access tokens last hours. Renew a nearly-expired one here, so a long
+/// agent session keeps working, and save the new tokens back to the keychain.
+/// Any problem falls back to the stored value, which then fails visibly upstream.
+fn renewed_if_needed(provider: &str, key: &str, stored: String) -> String {
+    if provider != "github" {
+        return stored;
+    }
+    let Some(tokens) = github_auth::Tokens::from_json(&stored) else { return stored };
+    if !tokens.needs_refresh(github_auth::now_secs()) {
+        return stored;
+    }
+    let (Some(client_id), Some(refresh_token)) = (github_auth::client_id(), tokens.refresh_token.as_deref()) else { return stored };
+    match github_auth::refresh(&client_id, refresh_token) {
+        Ok(renewed) => {
+            let json = renewed.to_json();
+            let _ = keyring::Entry::new(SERVICE, key).and_then(|entry| entry.set_password(&json));
+            json
+        }
+        Err(_) => stored,
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some(key) = keychain_key(&args) else {
@@ -30,7 +57,7 @@ fn main() {
         std::process::exit(2);
     };
     match keyring::Entry::new(SERVICE, &key).and_then(|entry| entry.get_password()) {
-        Ok(value) => print!("{value}"),
+        Ok(value) => print!("{}", renewed_if_needed(&args[0], &key, value)),
         Err(_) => {
             eprintln!("No saved approval for this connection.");
             std::process::exit(1);

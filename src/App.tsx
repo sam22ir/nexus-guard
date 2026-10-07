@@ -291,7 +291,7 @@ function App() {
     }
     if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from this desktop vault.`)) return;
     for (const connection of target.connections) {
-      await removeMcpTokens(projectId, connection.id).catch(() => undefined);
+      await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
     }
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);
@@ -477,6 +477,113 @@ function App() {
     throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
   }
 
+  // ---- GitHub: the user approves Nexus with their own GitHub account (device flow) ----
+  const [githubStatus, setGithubStatus] = useState<{ configured: boolean; install_url?: string | null }>({ configured: false });
+  useEffect(() => {
+    if (!desktopAvailable()) return;
+    invoke<{ configured: boolean; install_url?: string | null }>("github_status").then(setGithubStatus).catch(() => undefined);
+  }, []);
+
+  type GithubRepoChoice = { full_name: string; private: boolean };
+  const githubText = (error: unknown, fallback: string) => (typeof error === "string" && error ? error : fallback);
+
+  /** Step 1: ask GitHub for a code and open its approval page. Adds a pending binding that cancel or failure removes. */
+  async function githubStart(): Promise<{ connectionId: string; userCode: string; verificationUri: string; deviceCode: string; interval: number; expiresIn: number }> {
+    if (!project) throw new Error("No project is selected. Select a project before connecting.");
+    if (!desktopAvailable()) throw new Error("Open the desktop app to connect GitHub.");
+    const owner = project;
+    let flow: { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
+    try {
+      flow = await invoke("start_github_device_flow");
+    } catch (error) {
+      throw new Error(githubText(error, "Could not start the GitHub sign-in. Try again."));
+    }
+    const connection: Connection = {
+      id: makeId("connection"),
+      provider: "GitHub",
+      short: "GH",
+      target: "GitHub",
+      resource: "GitHub",
+      environment: owner.environment ?? "development",
+      detail: "Code and issues",
+      tone: "blue",
+      state: "Needs review",
+      method: "mcp",
+      authState: "pending",
+    };
+    setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: [...item.connections, connection] } : item));
+    pendingMcp.current = { projectId: owner.id, connectionId: connection.id };
+    await openUrl(flow.verification_uri).catch(() => undefined);
+    return { connectionId: connection.id, userCode: flow.user_code, verificationUri: flow.verification_uri, deviceCode: flow.device_code, interval: flow.interval, expiresIn: flow.expires_in };
+  }
+
+  async function githubDropPending(projectId: string, connectionId: string) {
+    await removeMcpTokens(projectId, connectionId, "github").catch(() => undefined);
+    setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connectionId) } : item));
+    if (pendingMcp.current?.connectionId === connectionId) pendingMcp.current = null;
+  }
+
+  /** Step 2: wait for the user to approve, then list the repositories the Nexus GitHub App can see. */
+  async function githubWait(start: { connectionId: string; deviceCode: string; interval: number; expiresIn: number }, signal: AbortSignal): Promise<{ login: string | null; repos: GithubRepoChoice[] }> {
+    const projectId = pendingMcp.current?.projectId ?? project?.id ?? "";
+    let wait = Math.max(1, start.interval);
+    const deadline = Date.now() + start.expiresIn * 1000;
+    try {
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, wait * 1000));
+        if (signal.aborted) { const cancelled = new Error("The GitHub approval was cancelled."); cancelled.name = "AbortError"; throw cancelled; }
+        let result: { status: string; login?: string | null };
+        try {
+          result = await invoke("poll_github_device_flow", { deviceCode: start.deviceCode, projectId, connectionId: start.connectionId });
+        } catch (error) {
+          throw new Error(githubText(error, "Could not finish the GitHub sign-in. Try again."));
+        }
+        if (result.status === "slow_down") wait += 5;
+        if (result.status === "denied") throw new Error("GitHub approval was declined. Start again if that was a mistake.");
+        if (result.status === "expired") throw new Error("The GitHub code expired. Start again and approve within a few minutes.");
+        if (result.status === "done") {
+          const repos = await githubRepos(start.connectionId, projectId).catch(() => [] as GithubRepoChoice[]);
+          return { login: result.login ?? null, repos };
+        }
+      }
+      throw new Error("The GitHub code expired. Start again and approve within a few minutes.");
+    } catch (error) {
+      await githubDropPending(projectId, start.connectionId);
+      throw error;
+    }
+  }
+
+  async function githubRepos(connectionId: string, projectId?: string): Promise<GithubRepoChoice[]> {
+    const owner = projectId ?? pendingMcp.current?.projectId ?? project?.id ?? "";
+    try {
+      return await invoke<GithubRepoChoice[]>("list_github_repos", { projectId: owner, connectionId });
+    } catch (error) {
+      throw new Error(githubText(error, "Could not load your GitHub repositories. Try again."));
+    }
+  }
+
+  /** Step 3: bind the chosen repository. The account is named after the GitHub user. */
+  async function githubConfirm(ownerProjectId: string, connectionId: string, repo: string, login: string | null) {
+    const owner = projects.find((item) => item.id === ownerProjectId);
+    const linked = owner?.connections.find((c) => c.id === connectionId);
+    if (!owner || !linked) throw new Error("That GitHub request is gone. Start again.");
+    const accountId = createAccount({ provider: "GitHub", label: login?.trim() || "personal" });
+    const accountEntry = accountsRef.current.find((a) => a.id === accountId);
+    const sharedWith = projects.filter((item) => item.id !== ownerProjectId && item.connections.some((c) => c.provider === "GitHub" && c.accountId === accountId));
+    const connected: Connection = { ...linked, accountId, account: accountEntry?.label ?? accountId, target: repo, resource: repo, authState: "connected" };
+    setProjects((current) => current.map((item) => item.id === ownerProjectId ? { ...item, connections: item.connections.map((c) => c.id === connectionId ? connected : c) } : item));
+    pendingMcp.current = null;
+    setModal(null);
+    try {
+      const filePath = await syncNexusProjectFile(owner, connected, "connected");
+      const shared = sharedWith.length > 0 ? ` This GitHub account is also used by ${sharedWith.map((item) => item.name).join(", ")}.` : "";
+      setNotice(`GitHub is connected to ${repo} as “${connected.account}”.${filePath ? ` Nexus wrote ${filePath}.` : ""}${shared}`);
+    } catch (error) {
+      reportError("Linking GitHub repository", error, { kind: "link", projectId: ownerProjectId, connectionId });
+      setNotice("Connected, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity.");
+    }
+  }
+
   /** Step 1 of connect-first MCP: browser approval + token save under a pending connection. Returns the user's Supabase projects to pick from. */
   async function authorizeMcpConnection(detail: string, accountId?: string): Promise<{ connectionId: string; projects: SupabaseChoice[]; listError?: string }> {
     if (!project) throw new Error("No project is selected. Select a project before connecting.");
@@ -570,7 +677,8 @@ function App() {
     // Stop a still-running browser-approval poll first; its cleanup removes
     // the same pending connection, and both paths are idempotent.
     if (pendingMcp.current?.connectionId === connectionId) abortMcpAuthorize();
-    await removeMcpTokens(ownerProjectId, connectionId).catch(() => undefined);
+    const pendingProvider = projects.find((item) => item.id === ownerProjectId)?.connections.find((c) => c.id === connectionId)?.provider;
+    await removeMcpTokens(ownerProjectId, connectionId, pendingProvider).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === ownerProjectId ? { ...item, connections: item.connections.filter((c) => c.id !== connectionId) } : item));
   }
 
@@ -581,7 +689,7 @@ function App() {
     const projectId = holder.id;
     setNotice("");
     // Best-effort vault cleanup first; a missing entry is not an error.
-    await removeMcpTokens(projectId, connection.id).catch(() => undefined);
+    await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
     await removePublishableKey(projectId, connection.id).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connection.id) } : item));
     setSavedKeys((current) => {
@@ -819,7 +927,7 @@ function App() {
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );

@@ -12,6 +12,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::form_urlencoded;
 
+mod github_auth;
+
 const MCP_RESOURCE: &str = "https://mcp.supabase.com/mcp";
 const AUTHORIZATION_ENDPOINT: &str = "https://api.supabase.com/v1/oauth/authorize";
 const TOKEN_ENDPOINT: &str = "https://api.supabase.com/v1/oauth/token";
@@ -2457,6 +2459,138 @@ fn stop_nexus_server(app: &tauri::AppHandle) {
     }
 }
 
+// ---- GitHub: each user approves Nexus with their own GitHub account ----
+
+#[derive(Serialize)]
+struct GithubStatus {
+    /// False when this build has no GitHub App client ID.
+    configured: bool,
+    /// Where to install the Nexus GitHub App on the user's repositories.
+    install_url: Option<String>,
+}
+
+#[tauri::command]
+fn github_status() -> GithubStatus {
+    GithubStatus {
+        configured: github_auth::client_id().is_some(),
+        install_url: github_auth::app_slug().map(|slug| format!("https://github.com/apps/{slug}/installations/new")),
+    }
+}
+
+fn github_key(project_id: &str, connection_id: &str) -> Result<String, String> {
+    let valid = |value: &str| !value.is_empty() && value.len() <= 128 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !valid(project_id) || !valid(connection_id) {
+        return Err("That GitHub connection is not valid. Start again.".to_string());
+    }
+    Ok(format!("mcp:github:{project_id}:{connection_id}"))
+}
+
+fn github_client_id_or_explain() -> Result<String, String> {
+    github_auth::client_id().ok_or_else(|| "GitHub is not set up in this build yet. Add the Nexus GitHub App client ID, or enter the details manually.".to_string())
+}
+
+fn github_get(url: &str, token: &str) -> Result<serde_json::Value, String> {
+    let text = ureq::get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "Nexus-Guard")
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|_| "GitHub did not answer. Check your network, or connect GitHub again.".to_string())?
+        .into_body()
+        .read_to_string()
+        .map_err(|_| "GitHub returned something unexpected. Try again in a moment.".to_string())?;
+    serde_json::from_str(&text).map_err(|_| "GitHub returned something unexpected. Try again in a moment.".to_string())
+}
+
+/// This binding's stored tokens, renewed first when they are about to expire.
+fn github_tokens(key: &str) -> Result<github_auth::Tokens, String> {
+    let entry = keyring_entry(key)?;
+    let raw = entry.get_password().map_err(|_| "GitHub is not connected for this binding. Connect it again.".to_string())?;
+    let tokens = github_auth::Tokens::from_json(&raw).ok_or_else(|| "The saved GitHub approval is unreadable. Connect GitHub again.".to_string())?;
+    if !tokens.needs_refresh(github_auth::now_secs()) {
+        return Ok(tokens);
+    }
+    let refresh_token = tokens.refresh_token.clone().unwrap_or_default();
+    let renewed = github_auth::refresh(&github_client_id_or_explain()?, &refresh_token)?;
+    entry.set_password(&renewed.to_json()).map_err(|_| "The system keychain is unavailable. Unlock it and try again.".to_string())?;
+    Ok(renewed)
+}
+
+#[tauri::command]
+async fn start_github_device_flow() -> Result<github_auth::DeviceStart, String> {
+    let client_id = github_client_id_or_explain()?;
+    tauri::async_runtime::spawn_blocking(move || github_auth::start(&client_id))
+        .await
+        .map_err(|_| "Nexus could not start the GitHub sign-in. Try again.".to_string())?
+}
+
+#[derive(Serialize)]
+struct GithubPollResult {
+    /// pending | slow_down | done | expired | denied
+    status: String,
+    login: Option<String>,
+}
+
+/// Check once whether the user has approved. On approval the tokens go straight
+/// to the OS keychain; the page only ever learns the GitHub username.
+#[tauri::command]
+async fn poll_github_device_flow(device_code: String, project_id: String, connection_id: String) -> Result<GithubPollResult, String> {
+    let key = github_key(&project_id, &connection_id)?;
+    let client_id = github_client_id_or_explain()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = |value: &str| Ok(GithubPollResult { status: value.to_string(), login: None });
+        match github_auth::poll(&client_id, &device_code)? {
+            github_auth::Poll::Pending => status("pending"),
+            github_auth::Poll::SlowDown => status("slow_down"),
+            github_auth::Poll::Expired => status("expired"),
+            github_auth::Poll::Denied => status("denied"),
+            github_auth::Poll::Done(tokens) => {
+                keyring_entry(&key)?
+                    .set_password(&tokens.to_json())
+                    .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())?;
+                let login = github_get("https://api.github.com/user", &tokens.access_token)
+                    .ok()
+                    .and_then(|user| user.get("login").and_then(|v| v.as_str()).map(str::to_string));
+                Ok(GithubPollResult { status: "done".to_string(), login })
+            }
+        }
+    })
+    .await
+    .map_err(|_| "Nexus could not check the GitHub sign-in. Try again.".to_string())?
+}
+
+#[derive(Serialize)]
+struct GithubRepo {
+    full_name: String,
+    private: bool,
+}
+
+/// The repositories this user has installed the Nexus GitHub App on.
+#[tauri::command]
+async fn list_github_repos(project_id: String, connection_id: String) -> Result<Vec<GithubRepo>, String> {
+    let key = github_key(&project_id, &connection_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = github_tokens(&key)?.access_token;
+        let installations = github_get("https://api.github.com/user/installations?per_page=100", &token)?;
+        let mut repos = Vec::new();
+        for installation in installations.get("installations").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            let Some(id) = installation.get("id").and_then(|v| v.as_u64()) else { continue };
+            let page = github_get(&format!("https://api.github.com/user/installations/{id}/repositories?per_page=100"), &token)?;
+            for repo in page.get("repositories").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+                if let Some(full_name) = repo.get("full_name").and_then(|v| v.as_str()) {
+                    repos.push(GithubRepo { full_name: full_name.to_string(), private: repo.get("private").and_then(|v| v.as_bool()).unwrap_or(false) });
+                }
+            }
+        }
+        repos.sort_by(|a, b| a.full_name.to_lowercase().cmp(&b.full_name.to_lowercase()));
+        repos.dedup_by(|a, b| a.full_name == b.full_name);
+        Ok(repos)
+    })
+    .await
+    .map_err(|_| "Nexus could not load your GitHub repositories. Try again.".to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2508,7 +2642,11 @@ pub fn run() {
             remove_agent_entry,
             test_agent_setup,
             node_binary_path,
-            ensure_nexus_server
+            ensure_nexus_server,
+            github_status,
+            start_github_device_flow,
+            poll_github_device_flow,
+            list_github_repos
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");

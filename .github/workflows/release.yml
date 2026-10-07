@@ -53,6 +53,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public identifiers for the Nexus GitHub App (docs/github-app-setup.md). Unset = GitHub shows as not set up.
+          NEXUS_GITHUB_CLIENT_ID: ${{ vars.NEXUS_GITHUB_CLIENT_ID }}
+          NEXUS_GITHUB_APP_SLUG: ${{ vars.NEXUS_GITHUB_APP_SLUG }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Nexus Guard ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}

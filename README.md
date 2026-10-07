@@ -33,7 +33,7 @@ On first launch the setup wizard takes about two minutes:
 2. **Agent:** pick your agent and press Connect. Nexus adds one entry to that agent's project config, keeps your other servers and saves a backup first.
 3. **See it work:** restart the agent in that folder and ask it "Which Nexus project am I in?". The wizard shows the call when it arrives.
 
-Binding Supabase or GitHub to the project is optional and can be done at the end or later from the Project page (Bindings). Skipped setup resumes from Home ("Finish setup") or the Status checklist on the Project page.
+Binding Supabase or GitHub to the project is optional (GitHub needs the Nexus GitHub App to be set up; see [docs/github-app-setup.md](docs/github-app-setup.md)) and can be done at the end or later from the Project page (Bindings). Skipped setup resumes from Home ("Finish setup") or the Status checklist on the Project page.
 
 ### How the installer is built
 
