@@ -69,7 +69,8 @@ Agents reach one persistent local Nexus over HTTP:
   created with and does not have to resend the header.
 - The standalone HTTP bridge enables fail-closed vault locking. It reads the
   secret-free state file selected by `NEXUS_VAULT_STATE_FILE`, then
-  `XDG_RUNTIME_DIR`, then `~/.config/nexus-guard/vault-state.json`. A missing
+  `XDG_RUNTIME_DIR`, then `vault-state.json` in the app's settings folder
+  (below). The desktop app passes both paths to the server it starts. A missing
   or damaged state file is locked. `/healthz` and safe `GET /context` remain
   available (carve-outs), `DELETE` session teardown is allowed, while other
   `/mcp` requests return HTTP `423` until the desktop app unlocks.
@@ -186,3 +187,19 @@ self-added fail-closed (curated when explicitly listed), HTTP multiplexing incl.
 end-to-end against a live server is still pending (see
 [VALIDATION-HTTP](../docs/VALIDATION-HTTP.md)) — unit suites do not check
 those gates.
+
+## Settings folder
+
+Write grants, binding scopes and custom services live in the app's own
+settings folder, never in a project folder, so an agent confined to its
+workspace cannot change them. `mcp/config-dir.mjs` and `nexus_config_dir` in
+`src-tauri/src/lib.rs` pick the same folder:
+
+| System | Folder |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/nexus-guard`, else `~/.config/nexus-guard` |
+| macOS | `~/Library/Application Support/nexus-guard` |
+| Windows | `%APPDATA%\nexus-guard` |
+
+`NEXUS_CONFIG_DIR` overrides it. The desktop app always sets it for the server
+it starts, so the app and the server cannot disagree.

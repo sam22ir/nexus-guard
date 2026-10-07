@@ -29,8 +29,12 @@ export async function bundleServer(outfile) {
 
 function prepareKeyring() {
   const manifest = path.join(root, "src-tauri", "Cargo.toml");
-  const triple = /host: (\S+)/.exec(execFileSync("rustc", ["-vV"], { encoding: "utf8" }))?.[1];
-  if (!triple) throw new Error("Could not read the Rust target triple from `rustc -vV`.");
+  const host = /host: (\S+)/.exec(execFileSync("rustc", ["-vV"], { encoding: "utf8" }))?.[1];
+  if (!host) throw new Error("Could not read the Rust target triple from `rustc -vV`.");
+  // `tauri build --target x` (Intel macOS on an Apple Silicon runner) passes x
+  // here; the sidecar must be built for the same target as the app.
+  const triple = process.env.TAURI_ENV_TARGET_TRIPLE?.trim() || host;
+  const cross = triple !== host;
   const ext = triple.includes("windows") ? ".exe" : "";
   const outDir = path.join(root, "src-tauri", "binaries");
   const sidecar = path.join(outDir, `nexus-keyring-${triple}${ext}`);
@@ -38,9 +42,10 @@ function prepareKeyring() {
   // The app's build script requires the sidecar to exist, and building the helper
   // runs that same script, so a placeholder comes first and the real binary replaces it.
   if (!existsSync(sidecar)) writeFileSync(sidecar, "");
-  const args = ["build", "--manifest-path", manifest, "--bin", "nexus-keyring", ...(profile === "release" ? ["--release"] : [])];
+  const args = ["build", "--manifest-path", manifest, "--bin", "nexus-keyring", ...(profile === "release" ? ["--release"] : []), ...(cross ? ["--target", triple] : [])];
   execFileSync("cargo", args, { stdio: "inherit" });
-  copyFileSync(path.join(root, "src-tauri", "target", profile === "release" ? "release" : "debug", `nexus-keyring${ext}`), sidecar);
+  const built = path.join(root, "src-tauri", "target", ...(cross ? [triple] : []), profile === "release" ? "release" : "debug", `nexus-keyring${ext}`);
+  copyFileSync(built, sidecar);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

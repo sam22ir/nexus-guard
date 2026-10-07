@@ -276,7 +276,8 @@ test("symlink workspace resolves to realpath and finds manifest", async (t) => {
   await mkManifest(t, real, { project: "EdgeLink", account: "link-acct", resource: "link-res" });
   const link = path.join(os.tmpdir(), `nexus-edge-link-${process.pid}-${Date.now()}`);
   t.after(() => fs.rm(link, { recursive: true, force: true }));
-  await fs.symlink(real, link);
+  // A junction needs no admin rights on Windows; elsewhere the type is ignored.
+  await fs.symlink(real, link, "junction");
 
   // Unit: readContext-style realpath behaviour (resolveWorkspace passes through;
   // readContext realpaths before reading the manifest).

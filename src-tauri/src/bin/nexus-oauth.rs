@@ -101,9 +101,13 @@ fn run(project_id: &str, connection_id: &str) -> Result<(), String> {
     println!("OPEN THIS URL IN YOUR BROWSER:\n{authorization_url}\n");
     println!("Waiting for browser approval (up to 5 minutes)...");
     // Best-effort auto-open; user said they will click.
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&authorization_url)
-        .spawn();
+    let _ = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&authorization_url).spawn()
+    } else if cfg!(windows) {
+        std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &authorization_url]).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&authorization_url).spawn()
+    };
 
     let deadline = Instant::now() + Duration::from_secs(300);
     while Instant::now() < deadline {

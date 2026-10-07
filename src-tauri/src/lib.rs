@@ -276,13 +276,11 @@ fn poll_supabase_mcp_oauth(state: tauri::State<'_, OAuthManager>) -> Option<OAut
 
 fn expand_workspace_path(value: &str) -> PathBuf {
     if value == "~" {
-        return env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(value));
+        return home_dir().unwrap_or_else(|| PathBuf::from(value));
     }
-    if let Some(rest) = value.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
+    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
         }
     }
     PathBuf::from(value)
@@ -615,6 +613,56 @@ fn password_verifier(password: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(password.as_bytes()))
 }
 
+/// The user's home folder: HOME, then USERPROFILE (Windows).
+fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(|key| env::var_os(key))
+        .find(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The app's own settings folder (write grants, binding scopes, custom
+/// services). It must match `nexusConfigDir` in mcp/config-dir.mjs, and the
+/// server the app starts is handed this exact folder through NEXUS_CONFIG_DIR.
+fn nexus_config_dir() -> PathBuf {
+    config_dir_for(env::consts::OS, |key| env::var(key).ok().filter(|value| !value.trim().is_empty()))
+}
+
+/// Linux: $XDG_CONFIG_HOME or ~/.config; macOS: ~/Library/Application Support;
+/// Windows: %APPDATA%. Each gets a `nexus-guard` folder.
+fn config_dir_for(os: &str, var: impl Fn(&str) -> Option<String>) -> PathBuf {
+    if let Some(explicit) = var("NEXUS_CONFIG_DIR") {
+        return PathBuf::from(explicit.trim());
+    }
+    let home = var("HOME").or_else(|| var("USERPROFILE")).map(PathBuf::from).unwrap_or_else(env::temp_dir);
+    match os {
+        "windows" => var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+            .join("nexus-guard"),
+        "macos" => home.join("Library").join("Application Support").join("nexus-guard"),
+        _ => var("XDG_CONFIG_HOME")
+            .filter(|value| value.starts_with('/'))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("nexus-guard"),
+    }
+}
+
+/// A child process that never flashes a console window on Windows.
+fn background_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 fn vault_state_path() -> PathBuf {
     if let Ok(explicit) = env::var("NEXUS_VAULT_STATE_FILE") {
         if !explicit.trim().is_empty() {
@@ -626,12 +674,7 @@ fn vault_state_path() -> PathBuf {
             return PathBuf::from(runtime).join("nexus-guard-vault-state.json");
         }
     }
-    if let Ok(home) = env::var("HOME") {
-        if !home.trim().is_empty() {
-            return PathBuf::from(home).join(".config/nexus-guard/vault-state.json");
-        }
-    }
-    env::temp_dir().join("nexus-guard-vault-state.json")
+    nexus_config_dir().join("vault-state.json")
 }
 
 fn write_vault_state_at(path: &std::path::Path, locked: bool) -> Result<(), String> {
@@ -1075,10 +1118,10 @@ fn unmanaged_in_json_servers(
 /// `nested` selects `mcp.servers` (opencode-style) over `mcpServers`.
 /// Missing file or invalid JSON means "nothing seen", never an error.
 fn scan_global_json_mcp(relative: &str, nested: bool, port: &str) -> Vec<UnmanagedMcpEntry> {
-    let Some(home) = env::var_os("HOME") else {
+    let Some(home) = home_dir() else {
         return Vec::new();
     };
-    let path = PathBuf::from(home).join(relative);
+    let path = home.join(relative);
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(_) => return Vec::new(),
@@ -1151,10 +1194,10 @@ fn codex_unmanaged_in_text(source: &str, raw: &str, port: &str) -> Vec<Unmanaged
 /// Scan the global Codex TOML for `[mcp_servers.<name>]` blocks that are
 /// not Nexus. Line-based on purpose: no TOML dependency for one scan.
 fn scan_global_codex_toml(port: &str) -> Vec<UnmanagedMcpEntry> {
-    let Some(home) = env::var_os("HOME") else {
+    let Some(home) = home_dir() else {
         return Vec::new();
     };
-    let path = PathBuf::from(home).join(".codex/config.toml");
+    let path = home.join(".codex").join("config.toml");
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(_) => return Vec::new(),
@@ -1240,9 +1283,19 @@ fn executable_in_path(name: &str) -> bool {
     let Some(path_var) = env::var_os("PATH") else {
         return false;
     };
+    // Windows finds `claude` as claude.cmd or claude.exe, so try each PATHEXT.
+    let extensions: Vec<String> = if cfg!(windows) {
+        env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .filter(|ext| !ext.is_empty())
+            .map(|ext| ext.to_ascii_lowercase())
+            .collect()
+    } else {
+        Vec::new()
+    };
     env::split_paths(&path_var).any(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file()
+        dir.join(name).is_file() || extensions.iter().any(|ext| dir.join(format!("{name}{ext}")).is_file())
     })
 }
 
@@ -1286,7 +1339,7 @@ fn inspect_project_folder(workspace_path: String) -> Result<FolderInspection, St
     let mut git_branch = None;
     if is_dir {
         if let Some(root) = &root {
-            git_remote = std::process::Command::new("git")
+            git_remote = background_command("git")
                 .args(["remote", "get-url", "origin"])
                 .current_dir(root)
                 .output()
@@ -1299,7 +1352,7 @@ fn inspect_project_folder(workspace_path: String) -> Result<FolderInspection, St
                         None
                     }
                 });
-            git_branch = std::process::Command::new("git")
+            git_branch = background_command("git")
                 .args(["branch", "--show-current"])
                 .current_dir(root)
                 .output()
@@ -1511,7 +1564,7 @@ fn find_node_binary() -> String {
     // and installers put Node. Managers with many versions: newest wins.
     let mut fixed: Vec<PathBuf> = Vec::new();
     let mut managed: Vec<PathBuf> = Vec::new();
-    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from) {
+    if let Some(home) = home_dir() {
         managed.push(home.join(".nvm").join("versions").join("node"));
         managed.push(home.join(".local").join("share").join("fnm").join("node-versions"));
         managed.push(home.join("Library").join("Application Support").join("fnm").join("node-versions"));
@@ -1525,6 +1578,17 @@ fn find_node_binary() -> String {
         if let Some(base) = env::var_os(var) {
             fixed.push(PathBuf::from(base).join("nodejs").join(exe));
         }
+    }
+    // Windows version managers: nvm-windows links the active version at
+    // NVM_SYMLINK; Volta keeps shims in LOCALAPPDATA; fnm keeps versions in APPDATA.
+    if let Some(link) = env::var_os("NVM_SYMLINK") {
+        fixed.push(PathBuf::from(link).join(exe));
+    }
+    if let Some(local) = env::var_os("LOCALAPPDATA") {
+        fixed.push(PathBuf::from(local).join("Volta").join("bin").join(exe));
+    }
+    if let Some(roaming) = env::var_os("APPDATA") {
+        managed.push(PathBuf::from(roaming).join("fnm").join("node-versions"));
     }
     if let Some(found) = fixed.into_iter().find(|path| path.is_file()) {
         return found.to_string_lossy().into_owned();
@@ -1553,7 +1617,7 @@ fn find_node_binary() -> String {
 
 /// Major version of a Node binary (`v20.11.1` -> 20), or `None` when it will not run.
 fn node_major_version(binary: &str) -> Option<u32> {
-    let output = std::process::Command::new(binary).arg("--version").output().ok()?;
+    let output = background_command(binary).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -2282,7 +2346,8 @@ fn node_binary_path() -> String {
 
 #[tauri::command]
 fn detect_agents() -> Vec<DetectedAgent> {
-    let home = env::var_os("HOME").map(PathBuf::from);    let has_config = |relative: &str| -> bool {
+    let home = home_dir();
+    let has_config = |relative: &str| -> bool {
         home.as_ref()
             .map(|base| base.join(relative).exists())
             .unwrap_or(false)
@@ -2420,7 +2485,10 @@ fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
         Some(major) if major < MIN_NODE_MAJOR => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer, but found version {major}. Update it from nodejs.org, then reopen Nexus.") },
         Some(_) => {}
     }
-    let mut command = std::process::Command::new(&node);
+    let mut command = background_command(&node);
+    // Hand the server the exact folders this app uses, so the two never disagree.
+    command.env("NEXUS_CONFIG_DIR", nexus_config_dir());
+    command.env("NEXUS_VAULT_STATE_FILE", vault_state_path());
     if env::var_os("NEXUS_KEYRING_BIN").is_none() {
         if let Some(keyring) = bundled_keyring_binary() {
             command.env("NEXUS_KEYRING_BIN", keyring);
@@ -2746,8 +2814,7 @@ fn write_grants_path() -> PathBuf {
             return PathBuf::from(explicit);
         }
     }
-    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
-    PathBuf::from(home).join(".config/nexus-guard/write-grants.json")
+    nexus_config_dir().join("write-grants.json")
 }
 
 fn grant_key(project_id: &str, connection_id: &str) -> Result<String, String> {
@@ -2809,8 +2876,7 @@ fn binding_scopes_path() -> PathBuf {
             return PathBuf::from(explicit);
         }
     }
-    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
-    PathBuf::from(home).join(".config/nexus-guard/binding-scopes.json")
+    nexus_config_dir().join("binding-scopes.json")
 }
 
 fn read_scopes(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
@@ -2892,8 +2958,7 @@ fn custom_services_path() -> PathBuf {
             return PathBuf::from(explicit);
         }
     }
-    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
-    PathBuf::from(home).join(".config/nexus-guard/custom-services.json")
+    nexus_config_dir().join("custom-services.json")
 }
 
 fn read_custom_services(path: &std::path::Path) -> std::collections::BTreeMap<String, CustomService> {
@@ -3145,6 +3210,23 @@ mod agent_setup_tests {
         assert_eq!(parse_node_major("v18.0.0"), Some(18));
         assert_eq!(parse_node_major("26.3.0"), Some(26));
         assert_eq!(parse_node_major("not node"), None);
+    }
+
+    /// Same cases as mcp/config-dir.test.mjs, so the app and server agree.
+    #[test]
+    fn config_dir_per_platform() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string())
+        };
+        assert_eq!(config_dir_for("linux", vars(&[("HOME", "/home/u")])), PathBuf::from("/home/u/.config/nexus-guard"));
+        assert_eq!(config_dir_for("linux", vars(&[("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/home/u/cfg")])), PathBuf::from("/home/u/cfg/nexus-guard"));
+        assert_eq!(config_dir_for("linux", vars(&[("HOME", "/home/u"), ("XDG_CONFIG_HOME", "relative")])), PathBuf::from("/home/u/.config/nexus-guard"));
+        assert_eq!(config_dir_for("macos", vars(&[("HOME", "/Users/u")])), PathBuf::from("/Users/u/Library/Application Support/nexus-guard"));
+        assert_eq!(config_dir_for("windows", vars(&[("APPDATA", r"C:\Users\u\AppData\Roaming")])), PathBuf::from(r"C:\Users\u\AppData\Roaming").join("nexus-guard"));
+        assert_eq!(config_dir_for("windows", vars(&[("USERPROFILE", r"C:\Users\u")])), PathBuf::from(r"C:\Users\u").join("AppData").join("Roaming").join("nexus-guard"));
+        for os in ["linux", "macos", "windows"] {
+            assert_eq!(config_dir_for(os, vars(&[("HOME", "/home/u"), ("NEXUS_CONFIG_DIR", "/custom/dir")])), PathBuf::from("/custom/dir"));
+        }
     }
 
     #[test]

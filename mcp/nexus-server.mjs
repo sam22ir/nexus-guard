@@ -188,7 +188,7 @@ function normalizeRepo(value) {
 
 async function runGit(args, cwd) {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 5000, maxBuffer: 16 * 1024 });
+    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 5000, maxBuffer: 16 * 1024, windowsHide: true });
     const out = String(stdout ?? "").trim();
     return out ? out : null;
   } catch {
@@ -559,11 +559,17 @@ async function connectGitHub(_connection, accessToken) {
   };
 }
 
+/** The keychain helper: the one the app ships (NEXUS_KEYRING_BIN), else a source checkout's debug build. */
+export function keyringBinary(env = process.env, platform = process.platform) {
+  if (typeof env.NEXUS_KEYRING_BIN === "string" && env.NEXUS_KEYRING_BIN.trim()) return env.NEXUS_KEYRING_BIN;
+  const name = platform === "win32" ? "nexus-keyring.exe" : "nexus-keyring";
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri/target/debug", name);
+}
+
 async function readProviderToken(provider, projectId, connectionId) {
-  const binary = process.env.NEXUS_KEYRING_BIN ??
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri/target/debug/nexus-keyring");
+  const binary = keyringBinary();
   const { stdout } = await execFileAsync(binary, [normalizeProvider(provider), projectId, connectionId], {
-    maxBuffer: 64 * 1024, timeout: 10_000,
+    maxBuffer: 64 * 1024, timeout: 10_000, windowsHide: true,
   });
   const value = JSON.parse(stdout);
   const token = typeof value.accessToken === "string" && value.accessToken
@@ -574,10 +580,9 @@ async function readProviderToken(provider, projectId, connectionId) {
 }
 
 async function readSupabaseToken(projectId, connectionId) {
-  const binary = process.env.NEXUS_KEYRING_BIN ??
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri/target/debug/nexus-keyring");
+  const binary = keyringBinary();
   const { stdout } = await execFileAsync(binary, ["supabase", projectId, connectionId], {
-    maxBuffer: 64 * 1024, timeout: 10_000,
+    maxBuffer: 64 * 1024, timeout: 10_000, windowsHide: true,
   });
   const value = JSON.parse(stdout);
   if (typeof value.accessToken !== "string" || !value.accessToken) throw new Error("Approval token is missing.");
