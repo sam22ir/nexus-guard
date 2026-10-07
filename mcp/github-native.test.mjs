@@ -131,3 +131,36 @@ test("GitHub native: default token reader asks nexus-keyring for 'github <projec
   assert.equal((await fs.readFile(argsFile, "utf8")).trim(), "github koupa koupa-gh");
   assert.deepEqual(seen, ["token-from-helper"]);
 });
+
+// GitHub tools address a repository with owner + repo (or "owner/repo"), not
+// with target/resource. Nexus must hold the agent to this project's repository
+// itself, whatever the token can reach.
+test("GitHub native: a different repository named in arguments is blocked before the provider", async (t) => {
+  const dir = await fixture(t, { github: { target: "saadi/koupa", resource: "saadi/koupa", account: "personal", accountId: "personal-github", connection_id: "koupa-gh", method: "mcp", status: "connected" } });
+  const log = [];
+  const audits = [];
+  const client = await session(t, dir, log, audits);
+  const call = (operation, args) => client.callTool({ name: "nexus.execute", arguments: { provider: "github", operation, arguments: args } });
+
+  for (const args of [
+    { owner: "saadi", repo: "other" },
+    { owner: "someone-else", repo: "koupa" },
+    { repo: "saadi/other" },
+    { owner: "someone-else" },
+  ]) {
+    const res = await call("get_file_contents", args);
+    assert.equal(res.isError, true, JSON.stringify(args));
+    assert.equal(body(res).decision, "block", JSON.stringify(args));
+  }
+  assert.equal(log.filter((i) => i.kind === "call").length, 0, "no blocked call may reach GitHub");
+  assert(audits.some((a) => a.reason === "cross-project target"));
+
+  // The bound repository still works, however it is spelled.
+  for (const args of [{ owner: "saadi", repo: "koupa" }, { owner: "SAADI", repo: "Koupa" }, { repo: "saadi/koupa" }, { owner: "saadi" }, {}]) {
+    const ok = await call("get_file_contents", args);
+    assert.notEqual(ok.isError, true, JSON.stringify(args));
+  }
+  // The hidden github__ proxy is held to the same rule.
+  const proxied = await client.callTool({ name: "github__get_file_contents", arguments: { owner: "saadi", repo: "other" } });
+  assert.equal(proxied.isError, true);
+});

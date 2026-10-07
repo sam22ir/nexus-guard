@@ -454,6 +454,28 @@ export function applyOverride(guardResult, connection, context) {
   return base;
 }
 
+/** The repository a GitHub tool call names, as "owner/repo", or just the owner
+ *  when only that is given. GitHub tools address a repository with owner + repo
+ *  (or a full "owner/repo"), not with target/resource. Null when none is named. */
+export function githubNamedRepo(args) {
+  if (!args || typeof args !== "object") return null;
+  const owner = typeof args.owner === "string" && args.owner.trim() ? args.owner.trim() : null;
+  const repo = typeof args.repo === "string" && args.repo.trim() ? args.repo.trim() : null;
+  if (repo && repo.includes("/")) return { full: repo, owner: repo.split("/")[0] };
+  if (owner && repo) return { full: `${owner}/${repo}`, owner };
+  if (owner) return { full: null, owner };
+  return null;
+}
+
+/** True when a call names a repository other than the one bound to this project. */
+function namesOtherGithubRepo(connection, args) {
+  const named = githubNamedRepo(args);
+  if (!named) return false;
+  const bound = [connection.target, connection.resource].filter((v) => typeof v === "string" && v).map((v) => v.toLowerCase());
+  if (named.full) return !bound.includes(named.full.toLowerCase());
+  return !bound.some((v) => v.split("/")[0] === named.owner.toLowerCase());
+}
+
 function isCrossAccountTarget(connection, requested) {
   if (!requested || typeof requested !== "object") return false;
   const t = typeof requested.target === "string" && requested.target ? requested.target : null;
@@ -818,6 +840,11 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
         return decisionResult("approval_required", { reason: policy.reason, operation: upstreamName }, true);
       }
       return blocked(policy.reason, { operation: upstreamName });
+    }
+    // Hold the agent to this project's repository itself, whatever the token can reach.
+    if (namesOtherGithubRepo(connection, args)) {
+      await audit({ ...auditRecord({ sessionId: auditSid, context, connection, operation: upstreamName, decision: "block", reason: "cross-project target" }), __context: context });
+      return blocked("That repository does not belong to this project. Use the project's own repository, or ask the developer to add it.", { operation: upstreamName });
     }
     try {
       return await withGitHub(context, async (provider) => {
