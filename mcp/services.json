@@ -1,0 +1,181 @@
+{
+  "_note": "Remote MCP services Nexus can sign in to with no per-service setup. Keys are lowercase provider names. Checked 2026-10-07 (docs/launch-services.md). Add a service by adding a row here and a catalog entry in src/store.ts. \"scope\" names the argument a service's tools use for one resource so a binding can be limited to it; verified:false means it comes from docs and has not been checked against a live sign-in (a wrong name only makes the limit refuse more, never leak).",
+  "vercel": {
+    "name": "Vercel",
+    "mcpUrl": "https://mcp.vercel.com",
+    "scope": {
+      "label": "project",
+      "args": [
+        "projectId",
+        "project_id"
+      ],
+      "verified": false
+    }
+  },
+  "stripe": {
+    "name": "Stripe",
+    "mcpUrl": "https://mcp.stripe.com"
+  },
+  "cloudflare": {
+    "name": "Cloudflare",
+    "mcpUrl": "https://mcp.cloudflare.com/mcp",
+    "scope": {
+      "label": "account",
+      "args": [
+        "account_id",
+        "accountId"
+      ],
+      "verified": false
+    }
+  },
+  "neon": {
+    "name": "Neon",
+    "mcpUrl": "https://mcp.neon.tech/mcp",
+    "scope": {
+      "label": "project",
+      "args": [
+        "projectId",
+        "project_id"
+      ],
+      "verified": false
+    }
+  },
+  "sentry": {
+    "name": "Sentry",
+    "mcpUrl": "https://mcp.sentry.dev/mcp",
+    "scope": {
+      "label": "project",
+      "args": [
+        "projectSlug",
+        "projectSlugOrId",
+        "project_slug"
+      ],
+      "verified": false
+    }
+  },
+  "linear": {
+    "name": "Linear",
+    "mcpUrl": "https://mcp.linear.app/mcp"
+  },
+  "notion": {
+    "name": "Notion",
+    "mcpUrl": "https://mcp.notion.com/mcp"
+  },
+  "resend": {
+    "name": "Resend",
+    "mcpUrl": "https://mcp.resend.com/mcp"
+  },
+  "posthog": {
+    "name": "PostHog",
+    "mcpUrl": "https://mcp.posthog.com/mcp"
+  },
+  "netlify": {
+    "name": "Netlify",
+    "mcpUrl": "https://netlify-mcp.netlify.app/mcp",
+    "scope": {
+      "label": "site",
+      "args": [
+        "siteId",
+        "site_id"
+      ],
+      "verified": false
+    }
+  },
+  "railway": {
+    "name": "Railway",
+    "mcpUrl": "https://mcp.railway.com",
+    "scope": {
+      "label": "project",
+      "args": [
+        "projectId",
+        "project_id"
+      ],
+      "verified": false
+    }
+  },
+  "figma": {
+    "name": "Figma",
+    "mcpUrl": "https://mcp.figma.com/mcp"
+  },
+  "jira": {
+    "name": "Jira",
+    "mcpUrl": "https://mcp.atlassian.com/v1/mcp"
+  },
+  "confluence": {
+    "name": "Confluence",
+    "mcpUrl": "https://mcp.atlassian.com/v1/mcp"
+  },
+  "airtable": {
+    "name": "Airtable",
+    "mcpUrl": "https://mcp.airtable.com/mcp",
+    "scope": {
+      "label": "base",
+      "args": [
+        "baseId",
+        "base_id"
+      ],
+      "verified": false
+    }
+  },
+  "webflow": {
+    "name": "Webflow",
+    "mcpUrl": "https://mcp.webflow.com/mcp",
+    "scope": {
+      "label": "site",
+      "args": [
+        "site_id",
+        "siteId"
+      ],
+      "verified": false
+    }
+  },
+  "sanity": {
+    "name": "Sanity",
+    "mcpUrl": "https://mcp.sanity.io",
+    "scope": {
+      "label": "project",
+      "args": [
+        "projectId",
+        "project_id"
+      ],
+      "verified": false
+    }
+  },
+  "cloudinary": {
+    "name": "Cloudinary",
+    "mcpUrl": "https://asset-management.mcp.cloudinary.com/mcp"
+  },
+  "paypal": {
+    "name": "PayPal",
+    "mcpUrl": "https://mcp.paypal.com/mcp"
+  },
+  "mixpanel": {
+    "name": "Mixpanel",
+    "mcpUrl": "https://mcp.mixpanel.com/mcp"
+  },
+  "gitlab": {
+    "name": "GitLab",
+    "mcpUrl": "https://gitlab.com/api/v4/mcp",
+    "scope": {
+      "label": "project",
+      "args": [
+        "project_id",
+        "projectId",
+        "id"
+      ],
+      "verified": false
+    }
+  },
+  "planetscale": {
+    "name": "PlanetScale",
+    "mcpUrl": "https://mcp.pscale.dev/mcp/planetscale"
+  },
+  "huggingface": {
+    "name": "HuggingFace",
+    "mcpUrl": "https://huggingface.co/mcp"
+  },
+  "zapier": {
+    "name": "Zapier",
+    "mcpUrl": "https://mcp.zapier.com/api/mcp/mcp"
+  }
+}

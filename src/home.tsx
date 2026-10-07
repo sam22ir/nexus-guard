@@ -6,8 +6,9 @@ import { TopologyGraph, agentDisplayName, agentInitials, projectDisplayName, typ
 import { Button } from "@heroui/react";
 import { Badge, Card, CardHead, Empty, Icon, Segmented, StepRow, type StepState, type Tone } from "./ui";
 import { desktopAvailable } from "./vault";
+import { type NavTarget } from "./app/types";
 
-export type HomeNavTarget = "home" | "overview" | "projects" | "agents" | "bindings" | "services" | "guard" | "activity" | "settings";
+export type HomeNavTarget = NavTarget;
 
 type HomeAuditEntry = {
   ts?: string | null;
@@ -397,7 +398,7 @@ function NodeInspector({ selection, projects, accounts, sessions, entries, share
     subtitle = `${project.name} · ${connection.environment ?? project.environment}`;
     icon = "services";
     scoped = entries.filter((entry) => inProject(entry, project) && entry.provider?.toLowerCase() === connection.provider.toLowerCase() && (!entry.resource || entry.resource === resource || entry.resource === connection.target));
-    if (!connection.accountId && !connection.account) warnings.push({ tone: "warning", text: "No Services account is linked to this binding." });
+    if (!connection.accountId && !connection.account) warnings.push({ tone: "warning", text: "No account is linked to this binding." });
     if (sharedConnectionIds?.has(connection.id)) warnings.push({ tone: "warning", text: "This account is also bound to another project." });
     if (connection.authState === "pending") warnings.push({ tone: "info", text: "Waiting for browser approval." });
     overview = [["Account", accountLabelForConnection(connection, accounts) ?? "Not linked"], ["Resource", <span className="nx-mono" key="r">{resource}</span>], ["Approval", connection.authState ?? "not connected"], ["Calls seen", String(scoped.length)]];
@@ -505,7 +506,7 @@ function LinkConfirmCard({ draft, projects, accounts, onConfirm, onCancel, onCon
           </select>
         </label>
         {usesPicker ? (
-          <p className="text-[12px] leading-[1.55] text-(--muted)">Supabase resources come live from the account, so pick the project in the connection picker.</p>
+          <p className="text-[12px] leading-[1.55] text-(--muted)">Supabase resources come live from the account, so pick the project in the binding picker.</p>
         ) : (
           <label className="nx-field">
             Resource

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { tierForProvider, PROVIDER_CATALOG, type Account, type Connection, type Project } from "../store";
+import { GithubConnectPanel, type GithubApi } from "./GithubConnectPanel";
+import { ServiceConnectPanel, type RemoteServiceApi } from "./ServiceConnectPanel";
+import { tierForProvider, remoteServiceUrl, PROVIDER_CATALOG, type Account, type Connection, type Project } from "../store";
 import { Button } from "@heroui/react";
 import { Segmented } from "../ui";
 import { inputClass, selectClass } from "../app/styles";
 import { Modal } from "../app/common";
 
 type SaveInput = { provider: string; target: string; detail: string; tone: Connection["tone"]; method: Connection["method"]; authState: Connection["authState"]; projectRef?: string; url?: string; accountId?: string };
-type PickedProject = { ref: string; name: string; region?: string | null };
+type PickedProject = { ref: string; name: string; region?: string | null; organization_name?: string | null };
 
 /** What a service provides, and its tint, come from the catalog, not from the
  *  developer: they were free-text and color fields that carried no meaning. */
@@ -17,7 +19,7 @@ function defaultsFor(provider: string): { detail: string; tone: Connection["tone
 
 /** Bind one account and resource to a project. Supabase defaults to browser
  *  approval then a project pick; every other service is a short manual form. */
-export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp, onOpenServices }: {
+export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, remote, customNames, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
   projectId: string;
   projectName: string;
   environment?: string;
@@ -27,14 +29,21 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   accounts: Account[];
   onClose: () => void;
   onSave: (input: SaveInput) => void;
+  /** Link a new account on the spot and return its id. */
+  onCreateAccount: (input: { provider: string; label: string }) => string;
+  /** Connect the user's own GitHub account (device flow). */
+  github: GithubApi;
+  /** Services the user added themselves. */
+  customNames: string[];
+  /** Sign in to any other service on the launch list. */
+  remote: RemoteServiceApi;
   onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: PickedProject[]; listError?: string }>;
   onConfirmMcp: (projectId: string, connectionId: string, choice: PickedProject) => void;
   onCancelMcp: (projectId: string, connectionId: string) => void;
   onAbortMcp: () => void;
-  onOpenServices?: () => void;
 }) {
   const [provider, setProvider] = useState(initialProvider ?? "Supabase");
-  const [method, setMethod] = useState<"manual" | "mcp">((initialProvider ?? "Supabase") === "Supabase" ? "mcp" : "manual");
+  const [method, setMethod] = useState<"manual" | "mcp">(() => { const first = initialProvider ?? "Supabase"; return first === "Supabase" || (first === "GitHub" && github.configured) || (!!remoteServiceUrl(first) && remote.available) ? "mcp" : "manual"; });
   const [target, setTarget] = useState("");
   const [projectRef, setProjectRef] = useState("");
   const [url, setUrl] = useState("");
@@ -61,42 +70,58 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   }, []);
 
   const matchingAccounts = accounts.filter((a) => a.provider.toLowerCase() === provider.toLowerCase());
-  const [accountId, setAccountId] = useState(() => (initialAccountId && matchingAccounts.some((a) => a.id === initialAccountId) ? initialAccountId : matchingAccounts[0]?.id ?? ""));
+  // "__new__" links a fresh account when the binding is saved, so there is no separate step.
+  const NEW_ACCOUNT = "__new__";
+  const [accountId, setAccountId] = useState(() => (initialAccountId && matchingAccounts.some((a) => a.id === initialAccountId) ? initialAccountId : matchingAccounts[0]?.id ?? NEW_ACCOUNT));
+  const [newLabel, setNewLabel] = useState("personal");
   // A selected id that no longer exists falls back instead of submitting a stale id.
   useEffect(() => {
-    if (accountId && !matchingAccounts.some((a) => a.id === accountId)) setAccountId(matchingAccounts[0]?.id ?? "");
+    if (accountId !== NEW_ACCOUNT && !matchingAccounts.some((a) => a.id === accountId)) setAccountId(matchingAccounts[0]?.id ?? NEW_ACCOUNT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, provider]);
 
   const isSupabase = provider === "Supabase";
+  const isGithub = provider === "GitHub";
+  const githubBrowser = isGithub && github.configured;
+  const remoteBrowser = !isSupabase && !isGithub && !!remoteServiceUrl(provider);
   const providerTier = provider.trim() ? tierForProvider(provider) : "self-added";
   const [selfAddedConfirm, setSelfAddedConfirm] = useState(false);
   useEffect(() => { setSelfAddedConfirm(false); }, [provider]);
-  const sharedWith = accountId
+  const sharedWith = accountId && accountId !== NEW_ACCOUNT
     ? projects.filter((p) => p.id !== projectId && (p.connections ?? []).some((c) => c.provider.toLowerCase() === provider.toLowerCase() && (c.accountId ?? c.account) === accountId))
     : [];
   const canSaveManual = provider.trim().length > 0 && target.trim().length > 0 && (!isSupabase || (projectRef.trim().length > 0 && url.trim().length > 0)) && (providerTier !== "self-added" || selfAddedConfirm);
   const picking = method === "mcp" && mcpPhase === "pick";
-  const services = Array.from(new Set([...PROVIDER_CATALOG.map((p) => p.provider), ...accounts.map((a) => a.provider), "Other"]));
+  // Browser approval proves which Supabase account this is, so there is nothing to choose up front.
+  const accountFromApproval = (isSupabase || githubBrowser) && method === "mcp";
+  const services = Array.from(new Set([...PROVIDER_CATALOG.map((p) => p.provider), ...customNames, ...accounts.map((a) => a.provider), "Other"]));
 
   function changeProvider(next: string) {
     setProvider(next);
-    setMethod(next === "Supabase" ? "mcp" : "manual");
+    setMethod(next === "Supabase" || (next === "GitHub" && github.configured) || (!!remoteServiceUrl(next) && remote.available) ? "mcp" : "manual");
     setMcpPhase("auth");
     setError("");
-    setAccountId(accounts.find((a) => a.provider.toLowerCase() === next.toLowerCase())?.id ?? "");
+    setAccountId(accounts.find((a) => a.provider.toLowerCase() === next.toLowerCase())?.id ?? NEW_ACCOUNT);
+  }
+
+  /** The account to bind: the chosen one, or a new one linked now. */
+  function resolveAccountId(): string | undefined {
+    if (accountId !== NEW_ACCOUNT) return accountId || undefined;
+    const id = onCreateAccount({ provider: provider.trim(), label: newLabel });
+    setAccountId(id);
+    return id;
   }
 
   function saveManual() {
     const { detail, tone } = defaultsFor(provider.trim());
-    onSave({ provider: provider.trim(), target: target.trim(), detail, tone, method: "manual", authState: "not_connected", projectRef: projectRef.trim() || undefined, url: url.trim() || undefined, accountId: accountId || undefined });
+    onSave({ provider: provider.trim(), target: target.trim(), detail, tone, method: "manual", authState: "not_connected", projectRef: projectRef.trim() || undefined, url: url.trim() || undefined, accountId: resolveAccountId() });
   }
 
   async function authorize() {
     setBusy(true); setError(""); setMcpListError("");
     authInFlight.current = true;
     try {
-      const { connectionId, projects: found, listError } = await onAuthorizeMcp(defaultsFor("Supabase").detail, accountId || undefined);
+      const { connectionId, projects: found, listError } = await onAuthorizeMcp(defaultsFor("Supabase").detail, initialAccountId && matchingAccounts.some((a) => a.id === initialAccountId) ? initialAccountId : undefined);
       if (cancelledRef.current) return;
       setMcpConnectionId(connectionId);
       setMcpProjects(found);
@@ -136,7 +161,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
     onConfirmMcp(projectId, mcpConnectionId, choice);
   }
 
-  const onModalClose = method === "mcp" ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
+  const onModalClose = method === "mcp" && !githubBrowser && !remoteBrowser ? (mcpPhase === "pick" ? cancelAuthorize : (busy ? closeWhileAuthorizing : onClose)) : onClose;
   const canConfirmPick = !busy && (manualEntry || pickedRef.startsWith("manual:") ? projectRef.trim().length > 0 && target.trim().length > 0 : pickedRef.length > 0);
   const env = environment ?? "development";
 
@@ -156,35 +181,36 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
                   {services.map((service) => <option key={service} value={service}>{service}</option>)}
                 </select>
               </label>
+              {accountFromApproval ? (
+                <p className="nx-field justify-end pb-1 text-[12px] leading-[1.5] text-(--muted)">Your Supabase account is detected from the approval. Nothing to pick.</p>
+              ) : (
               <label className="nx-field">
                 Account
-                {matchingAccounts.length === 0 ? (
-                  <span className="flex min-h-10 items-center rounded-[10px] bg-(--raised) px-3 text-[12px] text-(--muted)">None linked yet</span>
-                ) : (
-                  <select value={accountId} onChange={(e) => setAccountId(e.target.value)} className={selectClass}>
-                    <option value="">Select an account…</option>
-                    {matchingAccounts.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.id}</option>)}
-                  </select>
-                )}
+                <select value={accountId} onChange={(e) => setAccountId(e.target.value)} className={selectClass}>
+                  {matchingAccounts.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.id}</option>)}
+                  <option value={NEW_ACCOUNT}>New {provider} account…</option>
+                </select>
               </label>
+              )}
             </div>
-            {matchingAccounts.length === 0 && (
-              <p className="flex flex-wrap items-center gap-2 text-[12px] leading-[1.5] text-(--muted)">
-                Link a {provider} account under Services first, then pick it here. Saving now stores the binding without one.
-                {onOpenServices && <Button size="sm" variant="outline" onPress={onOpenServices}>Open Services</Button>}
-              </p>
+            {accountId === NEW_ACCOUNT && !accountFromApproval && (
+              <label className="nx-field">
+                Name for this account
+                <input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} placeholder="personal" className={inputClass} />
+                <span className="text-[11.5px] text-(--muted-2)">Just a label, such as personal or work. It is linked when you save, and reused by other projects.</span>
+              </label>
             )}
-            {sharedWith.length > 0 && (
+            {sharedWith.length > 0 && !accountFromApproval && (
               <div className="rounded-[10px] bg-(--orange-bg) px-3 py-2 text-[12px] leading-[1.5] text-(--orange)">This account is also bound by {sharedWith.map((p) => p.name).join(", ")}. Sharing it widens what one credential can reach.</div>
             )}
           </>
         )}
 
-        {isSupabase && !picking && (
+        {(isSupabase || githubBrowser || (remoteBrowser && remote.available)) && !picking && (
           <Segmented label="How to connect" value={method} onChange={(value) => { setMethod(value); setError(""); }} options={[{ value: "mcp", label: "Browser approval" }, { value: "manual", label: "Enter details" }]} />
         )}
 
-        {method === "mcp" && mcpPhase === "auth" && (
+        {method === "mcp" && isSupabase && mcpPhase === "auth" && (
           <div className="rounded-[12px] border border-(--line) px-3.5 py-3 text-[12.5px] leading-[1.7] text-(--muted)">
             <p className="text-(--text)">Nexus opens Supabase in your browser.</p>
             <ol className="mt-1 list-decimal pl-5">
@@ -233,6 +259,10 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
                 ))}
               </div>
             )}
+            {(() => {
+              const picked = mcpProjects.find((p) => p.ref === pickedRef);
+              return picked ? <p className="text-[12px] text-(--muted)">Linked to your Supabase account <span className="font-medium text-(--text)">{picked.organization_name?.trim() || "personal"}</span>.</p> : null;
+            })()}
             {mcpProjects.length === 0 && <p className="text-[12.5px] text-(--muted)">No projects came back from Supabase. Enter the details manually instead.</p>}
             {(mcpProjects.length === 0 || manualEntry) && (
               <div className="grid gap-3 sm:grid-cols-2">
@@ -246,10 +276,14 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
           </>
         )}
 
-        {!picking && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
+        {remoteBrowser && method === "mcp" && <ServiceConnectPanel provider={provider} remote={remote} resolveAccountId={resolveAccountId} onClose={onClose} />}
+
+        {githubBrowser && method === "mcp" && <GithubConnectPanel github={github} projectId={projectId} onDiscard={(connectionId) => onCancelMcp(projectId, connectionId)} onClose={onClose} />}
+
+        {!picking && !(githubBrowser && method === "mcp") && !(remoteBrowser && method === "mcp") && <p className="text-[12px] text-(--muted)">Environment: <span className="text-(--text)">{env}</span> (from this project)</p>}
         {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
 
-        <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
+        {!(githubBrowser && method === "mcp") && !(remoteBrowser && method === "mcp") && <div className="flex justify-end gap-2 border-t border-(--line-soft) pt-3">
           {picking ? (
             <>
               <Button size="sm" variant="outline" isDisabled={busy} onPress={cancelAuthorize}>Cancel</Button>
@@ -266,7 +300,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
               <Button size="sm" isDisabled={!canSaveManual || busy} onPress={saveManual}>Add binding</Button>
             </>
           )}
-        </div>
+        </div>}
       </div>
     </Modal>
   );

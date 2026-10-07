@@ -10,6 +10,11 @@
 // to match UI vocabulary; enforcement stays fail-closed (approval_required) for
 // both curated and self-added. Do NOT delete enforcement.
 
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import services from "./services.json" with { type: "json" };
+
 export const PROVIDER_TIERS = Object.freeze(["native", "curated", "self-added"]);
 
 /** Minimal native read allowlists. Runtime still intersects with upstream listTools. */
@@ -127,4 +132,134 @@ export function isCostBearing(provider, _operation) {
   const name = normalizeProvider(provider);
   if (NATIVE_PROVIDERS[name]) return NATIVE_PROVIDERS[name].costBearingDefault === true;
   return false;
+}
+
+/**
+ * How a service names the resource a call is about, if it does at all
+ * (mcp/services.json "scope": { label, args }). Null means the service can only
+ * be limited to the whole signed-in account.
+ */
+export function serviceScopeSpec(provider) {
+  const entry = services[normalizeProvider(provider)];
+  const scope = entry && typeof entry === "object" ? entry.scope : null;
+  if (!scope || typeof scope !== "object" || !Array.isArray(scope.args) || scope.args.length === 0) return null;
+  return { label: typeof scope.label === "string" && scope.label ? scope.label : "resource", args: scope.args.filter((a) => typeof a === "string" && a) };
+}
+
+/**
+ * An address Nexus will send a sign-in to: https, normal port, a public-looking
+ * hostname, nothing smuggled in the URL. The desktop app applies the same rules
+ * when a service is added; the server checks again because it is what sends the token.
+ */
+export function isSafeServiceUrl(raw) {
+  let url;
+  try { url = new URL(String(raw).trim()); } catch { return false; }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+  if (url.port && url.port !== "443") return false;
+  const host = url.hostname.toLowerCase();
+  if (!host || host.startsWith("[") || /^[0-9.]+$/.test(host)) return false;
+  if (host === "localhost" || !host.includes(".")) return false;
+  return ![".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet"].some((suffix) => host.endsWith(suffix));
+}
+
+export function customServicesPath(env = process.env) {
+  if (typeof env.NEXUS_CUSTOM_SERVICES_FILE === "string" && env.NEXUS_CUSTOM_SERVICES_FILE.trim()) {
+    return path.resolve(env.NEXUS_CUSTOM_SERVICES_FILE.trim());
+  }
+  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
+  return path.join(home, ".config", "nexus-guard", "custom-services.json");
+}
+
+/** Services the user added in the app (name + address), read from the app's own config folder. Never from a project folder. */
+function customServices(filePath = customServicesPath()) {
+  try {
+    const found = JSON.parse(fsSync.readFileSync(filePath, "utf8"))?.services;
+    return found && typeof found === "object" && !Array.isArray(found) ? found : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The remote MCP address Nexus signs in to for this service (built in, or added by the user), or null. */
+export function serviceMcpUrl(provider) {
+  const key = normalizeProvider(provider);
+  const entry = services[key];
+  if (entry && typeof entry === "object" && typeof entry.mcpUrl === "string") return entry.mcpUrl;
+  // A built-in name can never be redefined by a custom entry.
+  if (key === "supabase" || key === "github" || key.startsWith("_")) return null;
+  const custom = customServices()[key];
+  return custom && typeof custom === "object" && isSafeServiceUrl(custom.mcpUrl) ? String(custom.mcpUrl).trim() : null;
+}
+
+/**
+ * What a remote tool says about itself (MCP tool annotations):
+ *  - "read": declares itself read-only and not destructive.
+ *  - "write": changes data but explicitly declares itself not destructive.
+ *  - "destructive": anything else, including a tool with no annotations
+ *    (the MCP default for an unlabelled tool is destructive).
+ */
+export function remoteToolKind(tool) {
+  const a = tool && typeof tool === "object" ? tool.annotations : null;
+  if (!a || typeof a !== "object") return "destructive";
+  if (a.readOnlyHint === true) return a.destructiveHint === true ? "destructive" : "read";
+  return a.destructiveHint === false ? "write" : "destructive";
+}
+
+const isProduction = (environment) => String(environment ?? "").trim().toLowerCase().startsWith("prod");
+
+/**
+ * Decide one remote tool call. Reads go through. A safe write goes through only
+ * when the developer switched writes on for this binding, and never in
+ * production. Everything else needs approval and is never forwarded.
+ */
+export function remoteToolDecision(tool, { allowWrites = false, environment } = {}) {
+  const kind = remoteToolKind(tool);
+  if (kind === "read") return { decision: "allow", reason: null, kind };
+  if (kind === "write") {
+    if (isProduction(environment)) {
+      return { decision: "approval_required", reason: "Changes are never allowed through Nexus in production. It was not run.", kind };
+    }
+    if (!allowWrites) {
+      return { decision: "approval_required", reason: "This changes data and writes are off for this binding. Turn on 'Allow safe writes' in Nexus to let it run. It was not run.", kind };
+    }
+    return { decision: "allow", reason: "write allowed by this binding's setting", kind };
+  }
+  return {
+    decision: "approval_required",
+    reason: "This tool may delete or change data in ways that cannot be undone, or does not say. It needs developer approval and was not run.",
+    kind,
+  };
+}
+
+const sameResource = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
+/** The argument this tool uses for the resource, read from its own input schema, or null. */
+export function scopeArgOf(tool, spec) {
+  const properties = tool?.inputSchema?.properties;
+  if (!spec || !properties || typeof properties !== "object") return null;
+  return spec.args.find((name) => Object.prototype.hasOwnProperty.call(properties, name)) ?? null;
+}
+
+/**
+ * Hold one call to the resource its binding is limited to.
+ *  - No spec or no bound value: the binding is account-wide, nothing changes.
+ *  - A tool with no argument for the resource cannot be limited, so it is refused
+ *    (an account-wide list or search would leak the other resources).
+ *  - A resource argument that names something else is refused.
+ *  - A missing one is filled in with the bound value.
+ * Only top-level arguments are checked.
+ */
+export function applyResourceScope({ tool, spec, bound, args }) {
+  if (!spec || bound == null || bound === "") return { ok: true, args: args ?? {} };
+  const argName = scopeArgOf(tool, spec);
+  if (!argName) {
+    return { ok: false, reason: `This binding is limited to one ${spec.label} ('${bound}'), and this tool cannot be limited to a ${spec.label}. It was not run.` };
+  }
+  const given = args && typeof args === "object" ? args : {};
+  for (const name of spec.args) {
+    if (Object.prototype.hasOwnProperty.call(given, name) && !sameResource(given[name], bound)) {
+      return { ok: false, reason: `This binding is limited to ${spec.label} '${bound}'. Use that, or leave '${name}' out. It was not run.` };
+    }
+  }
+  return { ok: true, args: { ...given, [argName]: bound } };
 }

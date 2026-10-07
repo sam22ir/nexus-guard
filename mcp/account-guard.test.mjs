@@ -263,3 +263,17 @@ test("top-level and nested account checked separately (no masking either way)", 
   }));
   assert.notEqual(ok.decision, "block");
 });
+
+test("nexus_context records one secret-free allow line in the workspace audit log", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-acct-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await writeManifest(dir, manifestWithAccount({}));
+  const client = await session(t, dir);
+  assert.equal(body(await client.callTool({ name: "nexus_context", arguments: {} })).project, "Koupa");
+  const lines = (await fs.readFile(path.join(dir, ".nexus", "audit.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l));
+  const entry = lines.find((l) => l.operation === "nexus.context");
+  assert.ok(entry);
+  assert.equal(entry.decision, "allow");
+  assert.equal(entry.project, "Koupa");
+  assert.doesNotMatch(JSON.stringify(entry), /token|secret|password/i);
+});

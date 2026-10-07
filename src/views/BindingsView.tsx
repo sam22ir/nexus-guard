@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../vault";
-import { tierForProvider, type Account, type Connection, type Project } from "../store";
+import { tierForProvider, remoteServiceUrl, remoteServiceScope, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey } from "../accounts";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
@@ -14,12 +14,11 @@ type Patch = { target: string; detail: string; tone: Connection["tone"]; project
 /** Project bindings as a list plus a detail panel for the selected one.
  *  Editing is inline; saving goes through the same confirm-with-diff step the
  *  old Edit modal used (paper §8: binding edits need developer confirmation). */
-export function BindingsView({ project, projects, accounts, onAdd, onSelectProject, onUpdate, vaultUnlocked, savedKeys, onSaveKey, onRemove, onOpenServices }: {
+export function BindingsView({ project, projects, accounts, onAdd, onUpdate, vaultUnlocked, savedKeys, onSaveKey, onRemove, onOpenServices }: {
   project: Project;
   projects: Project[];
   accounts: Account[];
   onAdd: () => void;
-  onSelectProject: (id: string) => void;
   onUpdate: (projectId: string, connectionId: string, patch: Patch) => void;
   vaultUnlocked: boolean;
   savedKeys: Record<string, boolean>;
@@ -45,13 +44,7 @@ export function BindingsView({ project, projects, accounts, onAdd, onSelectProje
   return (
     <div className="app-view flex min-h-0 w-full flex-1 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 text-[12px] text-(--muted)">
-          Project
-          <select value={project.id} onChange={(event) => onSelectProject(event.target.value)} aria-label="Project" className={`${selectClass} !h-9 !w-auto min-w-[160px]`}>
-            {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </label>
-        <p className="min-w-0 flex-1 truncate text-[12.5px] text-(--muted)">Link a login once under Services, then bind one account and resource per project here. Never raw secrets.</p>
+        <p className="min-w-0 flex-1 truncate text-[12.5px] text-(--muted)">Link an account once in Accounts, then bind one account and resource per project here. Never raw secrets.</p>
         <Button size="sm" onPress={onAdd}><NxIcon name="plus" size={15} />Add binding</Button>
       </div>
 
@@ -129,6 +122,57 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
   const [copied, setCopied] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  // "Allow safe writes" for services signed in with the generic flow. Saved in the app's own
+  // folder (not the project folder), so an agent cannot switch it on for itself.
+  const isRemote = !!remoteServiceUrl(connection.provider) && connection.method === "mcp";
+  const [writesOn, setWritesOn] = useState(false);
+  const [writesBusy, setWritesBusy] = useState(false);
+  const [writesError, setWritesError] = useState("");
+  useEffect(() => {
+    setWritesOn(false); setWritesError("");
+    if (!isRemote || !desktopAvailable()) return;
+    let cancelled = false;
+    invoke<boolean>("get_write_grant", { projectId: project.id, connectionId: connection.id }).then((on) => { if (!cancelled) setWritesOn(on); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [connection.id, project.id, isRemote]);
+  // Limit this binding to one project / site / base, for services that name one.
+  const scopeSpec = isRemote ? remoteServiceScope(connection.provider) : null;
+  const [limit, setLimit] = useState<string | null>(null);
+  const [limitDraft, setLimitDraft] = useState("");
+  const [limitBusy, setLimitBusy] = useState(false);
+  const [limitError, setLimitError] = useState("");
+  useEffect(() => {
+    setLimit(null); setLimitDraft(""); setLimitError("");
+    if (!scopeSpec || !desktopAvailable()) return;
+    let cancelled = false;
+    invoke<string | null>("get_binding_scope", { projectId: project.id, connectionId: connection.id }).then((value) => { if (!cancelled) { setLimit(value); setLimitDraft(value ?? ""); } }).catch(() => undefined);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.id, project.id, isRemote]);
+  async function saveLimit(value: string | null) {
+    setLimitBusy(true); setLimitError("");
+    try {
+      await invoke("set_binding_scope", { projectId: project.id, connectionId: connection.id, value });
+      setLimit(value); setLimitDraft(value ?? "");
+    } catch (error) {
+      setLimitError(typeof error === "string" && error ? error : "Could not save this setting. Try again.");
+    } finally {
+      setLimitBusy(false);
+    }
+  }
+  async function toggleWrites() {
+    const next = !writesOn;
+    if (next && !window.confirm(`Let agents make changes in ${connection.provider}?\n\nOnly actions ${connection.provider} labels as safe, non-destructive changes will run. Anything that deletes or may be destructive, and anything in production, is still refused.\n\nYou can switch this off at any time.`)) return;
+    setWritesBusy(true); setWritesError("");
+    try {
+      await invoke("set_write_grant", { projectId: project.id, connectionId: connection.id, allowed: next });
+      setWritesOn(next);
+    } catch {
+      setWritesError("Could not save this setting. Try again.");
+    } finally {
+      setWritesBusy(false);
+    }
+  }
   useEffect(() => { setAccountId(startAccount); setAccountTouched(false); setTarget(connection.target); setProjectRef(connection.projectRef ?? ""); setUrl(connection.url ?? ""); setTest(null); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.id]);
 
@@ -196,7 +240,7 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
               {matching.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.id}</option>)}
             </select>
             {matching.length === 0 && (
-              <span className="flex flex-wrap items-center gap-2 text-[11.5px] leading-[1.5]">No {connection.provider} account linked yet.{onOpenServices && <button type="button" onClick={onOpenServices} className="underline underline-offset-2 hover:text-(--text)">Open Services</button>}</span>
+              <span className="flex flex-wrap items-center gap-2 text-[11.5px] leading-[1.5]">No {connection.provider} account linked yet.{onOpenServices && <button type="button" onClick={onOpenServices} className="underline underline-offset-2 hover:text-(--text)">Open Accounts</button>}</span>
             )}
           </label>
           <div className="nx-field">
@@ -259,6 +303,39 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
                 <span className="nx-row-sub" style={test ? { color: test.ok ? "var(--green)" : "var(--red)", whiteSpace: "normal" } : undefined}>{test ? test.text : "Ask Supabase for this project through Nexus."}</span>
               </span>
               <Button size="sm" variant="outline" isDisabled={testing || !desktopAvailable()} onPress={() => void runTest()}>{testing ? "Testing…" : "Test"}</Button>
+            </div>
+          )}
+          {isRemote && connected && scopeSpec && (
+            <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0, alignItems: "flex-start" }}>
+              <span className="nx-tile"><NxIcon name="folder" size={16} /></span>
+              <span className="nx-row-body">
+                <span className="nx-row-title">Limit to one {scopeSpec.label}</span>
+                <span className="nx-row-sub" style={{ whiteSpace: "normal", ...(limitError ? { color: "var(--red)" } : {}) }}>
+                  {limitError || (limit
+                    ? `Limited to ${scopeSpec.label} “${limit}”. Tools that cannot be limited to a ${scopeSpec.label} are refused.`
+                    : `Not limited: agents can reach every ${scopeSpec.label} in this ${connection.provider} account.`)}
+                  {!scopeSpec.verified && " Not yet checked against a live sign-in, so some tools may be refused until it is."}
+                </span>
+                <span className="mt-1.5 flex gap-2">
+                  <input value={limitDraft} onChange={(e) => setLimitDraft(e.target.value)} placeholder={`${scopeSpec.label} name or id`} aria-label={`Limit to one ${scopeSpec.label}`} className={`${inputClass} nx-mono`} />
+                  <Button size="sm" isDisabled={limitBusy || !desktopAvailable() || !limitDraft.trim() || limitDraft.trim() === (limit ?? "")} onPress={() => void saveLimit(limitDraft.trim())}>{limitBusy ? "Saving…" : "Save"}</Button>
+                  {limit && <Button size="sm" variant="outline" isDisabled={limitBusy} onPress={() => void saveLimit(null)}>Remove limit</Button>}
+                </span>
+              </span>
+            </div>
+          )}
+          {isRemote && connected && (
+            <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0 }}>
+              <span className="nx-tile"><NxIcon name="shield" size={16} /></span>
+              <span className="nx-row-body">
+                <span className="nx-row-title">Allow safe writes</span>
+                <span className="nx-row-sub" style={{ whiteSpace: "normal", ...(writesError ? { color: "var(--red)" } : {}) }}>
+                  {writesError || (writesOn
+                    ? `On. Agents can run changes ${connection.provider} labels as safe. Deleting or unlabelled actions and anything in production stay refused.`
+                    : `Off. Agents can read ${connection.provider} but cannot change anything.`)}
+                </span>
+              </span>
+              <Button size="sm" variant={writesOn ? "primary" : "outline"} isDisabled={writesBusy || !desktopAvailable()} onPress={() => void toggleWrites()} aria-pressed={writesOn}>{writesBusy ? "Saving…" : writesOn ? "Turn off" : "Turn on"}</Button>
             </div>
           )}
           <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0 }}>

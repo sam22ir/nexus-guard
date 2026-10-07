@@ -86,15 +86,82 @@ test("GitHub native: cross-target and writes block before provider", async (t) =
   assert(audits.some((a) => a.provider === "github"));
 });
 
-test("Curated passthrough: notion execute requires approval without provider contact", async (t) => {
-  const dir = await fixture(t, { notion: { target: "koupa-docs", resource: "koupa-docs", account: "personal", connection_id: "koupa-notion", method: "mcp", status: "connected" } });
+// Firebase has no service address in mcp/services.json, so it stays fail-closed.
+test("Curated passthrough: a service with no address requires approval without provider contact", async (t) => {
+  const dir = await fixture(t, { firebase: { target: "koupa-fb", resource: "koupa-fb", account: "personal", connection_id: "koupa-firebase", method: "mcp", status: "connected" } });
   const log = [];
   const audits = [];
   const client = await session(t, dir, log, audits);
-  const res = await client.callTool({ name: "nexus_execute", arguments: { provider: "notion", operation: "search", arguments: {} } });
+  const res = await client.callTool({ name: "nexus_execute", arguments: { provider: "firebase", operation: "search", arguments: {} } });
   assert.equal(res.isError, true);
   assert.equal(body(res).decision, "approval_required");
   assert.equal(log.filter((i) => i.kind === "call").length, 0);
-  assert(audits.some((a) => a.provider === "notion" && a.decision === "approval_required"));
+  assert(audits.some((a) => a.provider === "firebase" && a.decision === "approval_required"));
   assert(!JSON.stringify(res).includes("fake-github-token"));
+});
+
+// The server reads a GitHub token through the nexus-keyring helper, which only
+// accepts "<supabase|github> <project-id> <connection-id>". A fake helper here
+// pins that argument contract end to end through the default token reader.
+test("GitHub native: default token reader asks nexus-keyring for 'github <project> <connection>'", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await fixture(t, { github: { target: "saadi/koupa", resource: "saadi/koupa", account: "personal", accountId: "personal-github", connection_id: "koupa-gh", method: "mcp", status: "connected" } });
+  const argsFile = path.join(dir, "helper-args.txt");
+  const helper = path.join(dir, "fake-keyring.sh");
+  await fs.writeFile(helper, `#!/bin/sh\necho "$@" > "${argsFile}"\n[ "$1" = "github" ] && printf '{"accessToken":"token-from-helper"}' || exit 2\n`, { mode: 0o755 });
+  const previous = process.env.NEXUS_KEYRING_BIN;
+  process.env.NEXUS_KEYRING_BIN = helper;
+  t.after(() => { if (previous === undefined) delete process.env.NEXUS_KEYRING_BIN; else process.env.NEXUS_KEYRING_BIN = previous; });
+
+  const seen = [];
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const server = makeNexusServer({
+    workspace: dir,
+    getToken: async () => "unused",
+    connectProvider: async () => ({ listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} }),
+    connectGithubProvider: async (connection, token) => {
+      seen.push(token);
+      return { listTools: async () => ({ tools: githubTools }), callTool: async () => ({ content: [{ type: "text", text: "{}" }] }), close: async () => {} };
+    },
+  });
+  const client = new Client({ name: "test", version: "1.0.0" }, { capabilities: {} });
+  await server.connect(serverSide);
+  await client.connect(clientSide);
+  t.after(async () => { await client.close(); await server.close(); });
+
+  await client.callTool({ name: "nexus.execute", arguments: { provider: "github", operation: "get_file_contents", arguments: {} } });
+  assert.equal((await fs.readFile(argsFile, "utf8")).trim(), "github koupa koupa-gh");
+  assert.deepEqual(seen, ["token-from-helper"]);
+});
+
+// GitHub tools address a repository with owner + repo (or "owner/repo"), not
+// with target/resource. Nexus must hold the agent to this project's repository
+// itself, whatever the token can reach.
+test("GitHub native: a different repository named in arguments is blocked before the provider", async (t) => {
+  const dir = await fixture(t, { github: { target: "saadi/koupa", resource: "saadi/koupa", account: "personal", accountId: "personal-github", connection_id: "koupa-gh", method: "mcp", status: "connected" } });
+  const log = [];
+  const audits = [];
+  const client = await session(t, dir, log, audits);
+  const call = (operation, args) => client.callTool({ name: "nexus.execute", arguments: { provider: "github", operation, arguments: args } });
+
+  for (const args of [
+    { owner: "saadi", repo: "other" },
+    { owner: "someone-else", repo: "koupa" },
+    { repo: "saadi/other" },
+    { owner: "someone-else" },
+  ]) {
+    const res = await call("get_file_contents", args);
+    assert.equal(res.isError, true, JSON.stringify(args));
+    assert.equal(body(res).decision, "block", JSON.stringify(args));
+  }
+  assert.equal(log.filter((i) => i.kind === "call").length, 0, "no blocked call may reach GitHub");
+  assert(audits.some((a) => a.reason === "cross-project target"));
+
+  // The bound repository still works, however it is spelled.
+  for (const args of [{ owner: "saadi", repo: "koupa" }, { owner: "SAADI", repo: "Koupa" }, { repo: "saadi/koupa" }, { owner: "saadi" }, {}]) {
+    const ok = await call("get_file_contents", args);
+    assert.notEqual(ok.isError, true, JSON.stringify(args));
+  }
+  // The hidden github__ proxy is held to the same rule.
+  const proxied = await client.callTool({ name: "github__get_file_contents", arguments: { owner: "saadi", repo: "other" } });
+  assert.equal(proxied.isError, true);
 });

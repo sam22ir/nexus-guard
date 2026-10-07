@@ -12,6 +12,10 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::form_urlencoded;
 
+mod github_auth;
+#[allow(dead_code)] // refresh is used by the nexus-keyring helper, which shares this file
+mod mcp_oauth;
+
 const MCP_RESOURCE: &str = "https://mcp.supabase.com/mcp";
 const AUTHORIZATION_ENDPOINT: &str = "https://api.supabase.com/v1/oauth/authorize";
 const TOKEN_ENDPOINT: &str = "https://api.supabase.com/v1/oauth/token";
@@ -796,6 +800,27 @@ struct SupabaseProjectSummary {
     name: String,
     region: Option<String>,
     organization_id: Option<String>,
+    /// The organization's display name, so the account can be named after it.
+    organization_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SupabaseApiOrganization {
+    id: String,
+    name: String,
+}
+
+/// Organization names by id. A convenience for naming the account; any failure
+/// just means the account gets a generic name.
+fn supabase_organization_names(access_token: &str) -> std::collections::HashMap<String, String> {
+    let fetched = ureq::get("https://api.supabase.com/v1/organizations")
+        .header("Accept", "application/json")
+        .header("Authorization", &format!("Bearer {}", access_token))
+        .call()
+        .ok()
+        .and_then(|response| response.into_body().read_to_string().ok())
+        .and_then(|text| serde_json::from_str::<Vec<SupabaseApiOrganization>>(&text).ok());
+    fetched.unwrap_or_default().into_iter().map(|org| (org.id, org.name)).collect()
 }
 
 /// List the signed-in user's Supabase projects so the desktop app can offer a
@@ -818,12 +843,14 @@ fn supabase_list_projects(access_token: String) -> Result<Vec<SupabaseProjectSum
         .map_err(|_| "Supabase returned something unexpected. Try again in a moment.".to_string())?;
     let projects: Vec<SupabaseApiProject> = serde_json::from_str(&text)
         .map_err(|_| "Supabase returned something unexpected. Try again in a moment.".to_string())?;
+    let organizations = supabase_organization_names(&access_token);
     Ok(projects
         .into_iter()
         .map(|project| SupabaseProjectSummary {
             project_ref: project.id,
             name: project.name,
             region: project.region,
+            organization_name: project.organization_id.as_ref().and_then(|id| organizations.get(id).cloned()),
             organization_id: project.organization_id,
         })
         .collect())
@@ -1471,29 +1498,82 @@ fn agent_config_path(workspace: &std::path::Path, agent_id: &str) -> Option<Path
 }
 
 fn find_node_binary() -> String {
+    let exe = if cfg!(windows) { "node.exe" } else { "node" };
     if let Some(path_var) = env::var_os("PATH") {
         for dir in env::split_paths(&path_var) {
-            let candidate = dir.join("node");
+            let candidate = dir.join(exe);
             if candidate.is_file() {
                 return candidate.to_string_lossy().into_owned();
             }
         }
     }
-    // nvm installs (GUI apps rarely inherit nvm's PATH): pick the newest version.
-    if let Ok(home) = env::var("HOME") {
-        let versions = PathBuf::from(home).join(".nvm").join("versions").join("node");
-        if let Ok(entries) = fs::read_dir(versions) {
-            let mut candidates: Vec<PathBuf> = entries
+    // GUI apps rarely inherit the shell's PATH, so look where version managers
+    // and installers put Node. Managers with many versions: newest wins.
+    let mut fixed: Vec<PathBuf> = Vec::new();
+    let mut managed: Vec<PathBuf> = Vec::new();
+    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from) {
+        managed.push(home.join(".nvm").join("versions").join("node"));
+        managed.push(home.join(".local").join("share").join("fnm").join("node-versions"));
+        managed.push(home.join("Library").join("Application Support").join("fnm").join("node-versions"));
+        fixed.push(home.join(".volta").join("bin").join(exe));
+        fixed.push(home.join(".asdf").join("shims").join(exe));
+    }
+    for dir in ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"] {
+        fixed.push(PathBuf::from(dir).join(exe));
+    }
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = env::var_os(var) {
+            fixed.push(PathBuf::from(base).join("nodejs").join(exe));
+        }
+    }
+    if let Some(found) = fixed.into_iter().find(|path| path.is_file()) {
+        return found.to_string_lossy().into_owned();
+    }
+    for root in managed {
+        if let Ok(entries) = fs::read_dir(&root) {
+            let mut versions: Vec<(Vec<u32>, PathBuf)> = entries
                 .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|path| path.join("bin").join("node").is_file())
+                .filter_map(|dir| {
+                    let binary = [dir.join("bin").join(exe), dir.join("installation").join("bin").join(exe), dir.join("installation").join(exe)]
+                        .into_iter()
+                        .find(|candidate| candidate.is_file())?;
+                    let name = dir.file_name()?.to_string_lossy().into_owned();
+                    let parts = name.trim_start_matches('v').split('.').map(|part| part.parse().unwrap_or(0)).collect();
+                    Some((parts, binary))
+                })
                 .collect();
-            candidates.sort();
-            if let Some(newest) = candidates.pop() {
-                return newest.join("bin").join("node").to_string_lossy().into_owned();
+            versions.sort();
+            if let Some((_, newest)) = versions.pop() {
+                return newest.to_string_lossy().into_owned();
             }
         }
     }
     "node".to_string()
+}
+
+/// Major version of a Node binary (`v20.11.1` -> 20), or `None` when it will not run.
+fn node_major_version(binary: &str) -> Option<u32> {
+    let output = std::process::Command::new(binary).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_node_major(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_node_major(version: &str) -> Option<u32> {
+    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+}
+
+/// The oldest Node major the bundled server supports.
+const MIN_NODE_MAJOR: u32 = 20;
+
+/// The `nexus-keyring` helper the app installs next to its own executable. The
+/// server reads approvals through it; a source checkout falls back to the
+/// server's built-in debug path.
+fn bundled_keyring_binary() -> Option<PathBuf> {
+    let dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidate = dir.join(if cfg!(windows) { "nexus-keyring.exe" } else { "nexus-keyring" });
+    candidate.is_file().then_some(candidate)
 }
 
 /// Write the agent's project MCP config so that agent routes through Nexus.
@@ -2279,24 +2359,658 @@ fn remove_nexus_connection(workspace_path: String, provider: String) -> Result<S
     Ok(manifest_path.to_string_lossy().into_owned())
 }
 
+/// The local Nexus HTTP server the app keeps running for agents. Owned here so
+/// it stops when the app closes (the vault locks then too, so agents would be
+/// refused anyway).
+#[derive(Default)]
+struct NexusServer(Mutex<Option<std::process::Child>>);
+
+#[derive(Serialize)]
+struct NexusServerStatus {
+    running: bool,
+    /// True when the fix is installing Node.js (missing or older than 20).
+    needs_node: bool,
+    started_by_app: bool,
+    url: String,
+    detail: String,
+}
+
+/// Find `mcp/nexus-http-server.mjs`: an explicit override, the app's bundled
+/// resources, or the source checkout the app was built from.
+fn nexus_server_script(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(custom) = env::var_os("NEXUS_MCP_SERVER") {
+        candidates.push(PathBuf::from(custom));
+    }
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("mcp").join("nexus-http-server.mjs"));
+        candidates.push(dir.join("_up_").join("mcp").join("nexus-http-server.mjs"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("mcp").join("nexus-http-server.mjs"));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// Start the Nexus HTTP server unless something already answers on its port.
+/// Never panics; a failure comes back as a plain-language `detail`.
+fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
+    use tauri::Manager;
+    let url = default_nexus_http_url();
+    let state = app.state::<NexusServer>();
+    let mut slot = match state.0.lock() {
+        Ok(slot) => slot,
+        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not check its local server. Restart the app.".to_string() },
+    };
+    // Forget a child that has exited so it can be started again.
+    if let Some(child) = slot.as_mut() {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            *slot = None;
+        }
+    }
+    let started_by_app = slot.is_some();
+    if probe_http_agent(&url) {
+        return NexusServerStatus { running: true, needs_node: false, started_by_app, url, detail: "Nexus is running.".to_string() };
+    }
+    let script = match nexus_server_script(app.path().resource_dir().ok()) {
+        Some(script) => script,
+        None => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not find its server files. Reinstall the app, or run `node mcp/nexus-http-server.mjs` from the project.".to_string() },
+    };
+    let node = find_node_binary();
+    match node_major_version(&node) {
+        None => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer to run its local server, and none was found. Install it from nodejs.org, then reopen Nexus.") },
+        Some(major) if major < MIN_NODE_MAJOR => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer, but found version {major}. Update it from nodejs.org, then reopen Nexus.") },
+        Some(_) => {}
+    }
+    let mut command = std::process::Command::new(&node);
+    if env::var_os("NEXUS_KEYRING_BIN").is_none() {
+        if let Some(keyring) = bundled_keyring_binary() {
+            command.env("NEXUS_KEYRING_BIN", keyring);
+        }
+    }
+    let child = command
+        .arg(&script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(child) => *slot = Some(child),
+        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not start its local server. Check that Node.js runs from a terminal, then reopen Nexus.".to_string() },
+    }
+    drop(slot);
+    for _ in 0..30 {
+        thread::sleep(std::time::Duration::from_millis(100));
+        if probe_http_agent(&url) {
+            return NexusServerStatus { running: true, needs_node: false, started_by_app: true, url, detail: "Nexus started.".to_string() };
+        }
+    }
+    NexusServerStatus { running: false, needs_node: false, started_by_app: true, url, detail: "Nexus started its server but it is not answering yet. Another program may be using the port.".to_string() }
+}
+
+#[tauri::command]
+fn ensure_nexus_server(app: tauri::AppHandle) -> NexusServerStatus {
+    ensure_nexus_server_running(&app)
+}
+
+fn stop_nexus_server(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Ok(mut slot) = app.state::<NexusServer>().0.lock() {
+        if let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+// ---- GitHub: each user approves Nexus with their own GitHub account ----
+
+#[derive(Serialize)]
+struct GithubStatus {
+    /// False when this build has no GitHub App client ID.
+    configured: bool,
+    /// Where to install the Nexus GitHub App on the user's repositories.
+    install_url: Option<String>,
+}
+
+#[tauri::command]
+fn github_status() -> GithubStatus {
+    GithubStatus {
+        configured: github_auth::client_id().is_some(),
+        install_url: github_auth::app_slug().map(|slug| format!("https://github.com/apps/{slug}/installations/new")),
+    }
+}
+
+fn github_key(project_id: &str, connection_id: &str) -> Result<String, String> {
+    let valid = |value: &str| !value.is_empty() && value.len() <= 128 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !valid(project_id) || !valid(connection_id) {
+        return Err("That GitHub connection is not valid. Start again.".to_string());
+    }
+    Ok(format!("mcp:github:{project_id}:{connection_id}"))
+}
+
+fn github_client_id_or_explain() -> Result<String, String> {
+    github_auth::client_id().ok_or_else(|| "GitHub is not set up in this build yet. Add the Nexus GitHub App client ID, or enter the details manually.".to_string())
+}
+
+fn github_get(url: &str, token: &str) -> Result<serde_json::Value, String> {
+    let text = ureq::get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "Nexus-Guard")
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|_| "GitHub did not answer. Check your network, or connect GitHub again.".to_string())?
+        .into_body()
+        .read_to_string()
+        .map_err(|_| "GitHub returned something unexpected. Try again in a moment.".to_string())?;
+    serde_json::from_str(&text).map_err(|_| "GitHub returned something unexpected. Try again in a moment.".to_string())
+}
+
+/// This binding's stored tokens, renewed first when they are about to expire.
+fn github_tokens(key: &str) -> Result<github_auth::Tokens, String> {
+    let entry = keyring_entry(key)?;
+    let raw = entry.get_password().map_err(|_| "GitHub is not connected for this binding. Connect it again.".to_string())?;
+    let tokens = github_auth::Tokens::from_json(&raw).ok_or_else(|| "The saved GitHub approval is unreadable. Connect GitHub again.".to_string())?;
+    if !tokens.needs_refresh(github_auth::now_secs()) {
+        return Ok(tokens);
+    }
+    let refresh_token = tokens.refresh_token.clone().unwrap_or_default();
+    let renewed = github_auth::refresh(&github_client_id_or_explain()?, &refresh_token)?;
+    entry.set_password(&renewed.to_json()).map_err(|_| "The system keychain is unavailable. Unlock it and try again.".to_string())?;
+    Ok(renewed)
+}
+
+#[tauri::command]
+async fn start_github_device_flow() -> Result<github_auth::DeviceStart, String> {
+    let client_id = github_client_id_or_explain()?;
+    tauri::async_runtime::spawn_blocking(move || github_auth::start(&client_id))
+        .await
+        .map_err(|_| "Nexus could not start the GitHub sign-in. Try again.".to_string())?
+}
+
+#[derive(Serialize)]
+struct GithubPollResult {
+    /// pending | slow_down | done | expired | denied
+    status: String,
+    login: Option<String>,
+}
+
+/// Check once whether the user has approved. On approval the tokens go straight
+/// to the OS keychain; the page only ever learns the GitHub username.
+#[tauri::command]
+async fn poll_github_device_flow(device_code: String, project_id: String, connection_id: String) -> Result<GithubPollResult, String> {
+    let key = github_key(&project_id, &connection_id)?;
+    let client_id = github_client_id_or_explain()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = |value: &str| Ok(GithubPollResult { status: value.to_string(), login: None });
+        match github_auth::poll(&client_id, &device_code)? {
+            github_auth::Poll::Pending => status("pending"),
+            github_auth::Poll::SlowDown => status("slow_down"),
+            github_auth::Poll::Expired => status("expired"),
+            github_auth::Poll::Denied => status("denied"),
+            github_auth::Poll::Done(tokens) => {
+                keyring_entry(&key)?
+                    .set_password(&tokens.to_json())
+                    .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())?;
+                let login = github_get("https://api.github.com/user", &tokens.access_token)
+                    .ok()
+                    .and_then(|user| user.get("login").and_then(|v| v.as_str()).map(str::to_string));
+                Ok(GithubPollResult { status: "done".to_string(), login })
+            }
+        }
+    })
+    .await
+    .map_err(|_| "Nexus could not check the GitHub sign-in. Try again.".to_string())?
+}
+
+#[derive(Serialize)]
+struct GithubRepo {
+    full_name: String,
+    private: bool,
+}
+
+/// The repositories this user has installed the Nexus GitHub App on.
+#[tauri::command]
+async fn list_github_repos(project_id: String, connection_id: String) -> Result<Vec<GithubRepo>, String> {
+    let key = github_key(&project_id, &connection_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = github_tokens(&key)?.access_token;
+        let installations = github_get("https://api.github.com/user/installations?per_page=100", &token)?;
+        let mut repos = Vec::new();
+        for installation in installations.get("installations").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            let Some(id) = installation.get("id").and_then(|v| v.as_u64()) else { continue };
+            let page = github_get(&format!("https://api.github.com/user/installations/{id}/repositories?per_page=100"), &token)?;
+            for repo in page.get("repositories").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+                if let Some(full_name) = repo.get("full_name").and_then(|v| v.as_str()) {
+                    repos.push(GithubRepo { full_name: full_name.to_string(), private: repo.get("private").and_then(|v| v.as_bool()).unwrap_or(false) });
+                }
+            }
+        }
+        repos.sort_by(|a, b| a.full_name.to_lowercase().cmp(&b.full_name.to_lowercase()));
+        repos.dedup_by(|a, b| a.full_name == b.full_name);
+        Ok(repos)
+    })
+    .await
+    .map_err(|_| "Nexus could not load your GitHub repositories. Try again.".to_string())?
+}
+
+// ---- Any remote MCP service: discover, register, sign in (see mcp_oauth.rs) ----
+
+#[derive(Default)]
+struct McpOAuthState {
+    result: Option<McpOAuthResult>,
+    /// Flipped by `cancel_mcp_oauth` so an abandoned sign-in can never save tokens.
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+#[derive(Clone, Default)]
+struct McpOAuthManager(Arc<Mutex<McpOAuthState>>);
+
+#[derive(Debug, Clone, Serialize)]
+struct McpOAuthResult {
+    success: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct McpOAuthStart {
+    authorization_url: String,
+    /// The read-only scopes asked for ("" when the service advertises none).
+    scopes: String,
+}
+
+fn mcp_key(service: &str, project_id: &str, connection_id: &str) -> Result<String, String> {
+    let slug_ok = (2..=40).contains(&service.len()) && service.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let id_ok = |v: &str| !v.is_empty() && v.len() <= 128 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !slug_ok || !id_ok(project_id) || !id_ok(connection_id) {
+        return Err("That connection is not valid. Start again.".to_string());
+    }
+    Ok(format!("mcp:{service}:{project_id}:{connection_id}"))
+}
+
+/// Wait for the browser to come back, then trade the code for tokens and save
+/// them straight to the keychain. The page only learns success or failure.
+fn run_mcp_callback(listener: TcpListener, manager: McpOAuthManager, cancelled: Arc<std::sync::atomic::AtomicBool>, ctx: mcp_oauth::TokenContext, state: String, verifier: String, redirect_uri: String, key: String) {
+    let _ = listener.set_nonblocking(true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(_) if cancelled.load(std::sync::atomic::Ordering::SeqCst) => return,
+            Err(_) if std::time::Instant::now() < deadline => thread::sleep(std::time::Duration::from_millis(200)),
+            Err(_) => {
+                if let Ok(mut inner) = manager.0.lock() {
+                    inner.result = Some(McpOAuthResult { success: false, error: Some("The sign-in took too long. Start again.".to_string()) });
+                }
+                return;
+            }
+        }
+    };
+    let _ = stream.set_nonblocking(false);
+    let mut request = [0u8; 8192];
+    let size = stream.read(&mut request).unwrap_or(0);
+    let request = String::from_utf8_lossy(&request[..size]);
+    let query = |parsed: &url::Url, name: &str| parsed.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+    let parsed = request
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("GET "))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|path| url::Url::parse(&format!("http://localhost{path}")).ok());
+    let outcome: Result<(), String> = match parsed {
+        _ if cancelled.load(std::sync::atomic::Ordering::SeqCst) => Err("The sign-in was cancelled.".to_string()),
+        None => Err("The sign-in reply was not understood. Try connecting again.".to_string()),
+        Some(parsed) if query(&parsed, "state").as_deref() != Some(state.as_str()) => Err("The sign-in reply did not match this request. Try connecting again.".to_string()),
+        Some(parsed) if query(&parsed, "error").is_some() => Err("The sign-in was declined or did not complete. Try connecting again.".to_string()),
+        Some(parsed) => match query(&parsed, "code") {
+            None => Err("The sign-in did not complete. Try connecting again.".to_string()),
+            Some(code) => mcp_oauth::exchange_code(&ctx, &code, &redirect_uri, &verifier).and_then(|tokens| {
+                keyring_entry(&key)?
+                    .set_password(&tokens.to_json())
+                    .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())
+            }),
+        },
+    };
+    callback_response(&mut stream, if outcome.is_ok() { "Nexus Guard is connected" } else { "Nexus Guard could not connect" });
+    if let Ok(mut inner) = manager.0.lock() {
+        inner.result = Some(McpOAuthResult { success: outcome.is_ok(), error: outcome.err() });
+    }
+}
+
+#[tauri::command]
+async fn start_mcp_oauth(
+    state: tauri::State<'_, McpOAuthManager>,
+    server_url: String,
+    service: String,
+    project_id: String,
+    connection_id: String,
+) -> Result<McpOAuthStart, String> {
+    let key = mcp_key(&service, &project_id, &connection_id)?;
+    let manager = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let discovery = mcp_oauth::discover(&server_url)?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "Nexus could not open its local sign-in page. Close anything using that port and try again.".to_string())?;
+        let port = listener.local_addr().map_err(|_| "Nexus could not open its local sign-in page.".to_string())?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
+        let (client_id, client_secret) = mcp_oauth::register(&discovery, &redirect_uri)?;
+        let state_token = random_token();
+        let verifier = random_token();
+        let scopes = mcp_oauth::read_scopes(&discovery.scopes_supported).join(" ");
+        let authorization_url = mcp_oauth::authorization_url(&discovery, &client_id, &redirect_uri, &mcp_oauth::pkce_challenge(&verifier), &state_token, &scopes)?;
+        let ctx = mcp_oauth::TokenContext {
+            token_endpoint: discovery.token_endpoint.clone(),
+            client_id,
+            client_secret,
+            auth_method: discovery.auth_method,
+            resource: Some(discovery.resource.clone()),
+            previous_refresh_token: None,
+        };
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(mut inner) = manager.0.lock() {
+            // A new attempt replaces any earlier one, which can then no longer save anything.
+            if let Some(previous) = inner.cancel.replace(cancelled.clone()) {
+                previous.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            inner.result = None;
+        }
+        thread::spawn(move || run_mcp_callback(listener, manager, cancelled, ctx, state_token, verifier, redirect_uri, key));
+        Ok(McpOAuthStart { authorization_url, scopes })
+    })
+    .await
+    .map_err(|_| "Nexus could not start the sign-in. Try again.".to_string())?
+}
+
+#[tauri::command]
+fn poll_mcp_oauth(state: tauri::State<'_, McpOAuthManager>) -> Option<McpOAuthResult> {
+    state.inner().0.lock().ok()?.result.take()
+}
+
+/// Stop waiting for the browser. Nothing from this sign-in is saved afterwards.
+#[tauri::command]
+fn cancel_mcp_oauth(state: tauri::State<'_, McpOAuthManager>) {
+    if let Ok(mut inner) = state.inner().0.lock() {
+        if let Some(flag) = inner.cancel.take() {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        inner.result = None;
+    }
+}
+
+// ---- Which bindings may make changes ("Allow safe writes") ----
+// Kept in the app's own config folder, never in the project folder, so an agent
+// cannot grant itself write access. The Nexus server reads the same file
+// (mcp/write-grants.mjs).
+
+fn write_grants_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_WRITE_GRANTS_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/write-grants.json")
+}
+
+fn grant_key(project_id: &str, connection_id: &str) -> Result<String, String> {
+    let ok = |v: &str| !v.is_empty() && v.len() <= 128 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !ok(project_id) || !ok(connection_id) {
+        return Err("That binding is not valid.".to_string());
+    }
+    Ok(format!("{project_id}:{connection_id}"))
+}
+
+fn read_grants(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("grants").and_then(|g| g.as_object().cloned()))
+        .unwrap_or_default()
+}
+
+fn set_grant_at(path: &std::path::Path, key: &str, allowed: bool) -> Result<(), String> {
+    let mut grants = read_grants(path);
+    if allowed {
+        grants.insert(key.to_string(), serde_json::Value::Bool(true));
+    } else {
+        grants.remove(key);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "grants": grants })).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this setting.".to_string())
+}
+
+#[tauri::command]
+fn get_write_grant(project_id: String, connection_id: String) -> Result<bool, String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    Ok(read_grants(&write_grants_path()).get(&key).and_then(|v| v.as_bool()) == Some(true))
+}
+
+#[tauri::command]
+fn set_write_grant(project_id: String, connection_id: String, allowed: bool) -> Result<(), String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    set_grant_at(&write_grants_path(), &key, allowed)
+}
+
+// ---- Limiting a binding to one resource (one project, site, base…) ----
+// Kept in the app's own config folder like the write switch, so an agent cannot
+// widen it. The Nexus server reads the same file (mcp/binding-scopes.mjs).
+
+fn binding_scopes_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_BINDING_SCOPES_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/binding-scopes.json")
+}
+
+fn read_scopes(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("scopes").and_then(|s| s.as_object().cloned()))
+        .unwrap_or_default()
+}
+
+/// A value is one resource name or id: short, one line, no control characters.
+fn clean_scope_value(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 200 || trimmed.chars().any(|c| c.is_control()) {
+        return Err("Enter one name or id, up to 200 characters on a single line.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn set_scope_at(path: &std::path::Path, key: &str, value: Option<&str>) -> Result<(), String> {
+    let mut scopes = read_scopes(path);
+    match value {
+        Some(value) => {
+            scopes.insert(key.to_string(), serde_json::Value::String(clean_scope_value(value)?));
+        }
+        None => {
+            scopes.remove(key);
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "scopes": scopes })).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this setting.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this setting.".to_string())
+}
+
+#[tauri::command]
+fn get_binding_scope(project_id: String, connection_id: String) -> Result<Option<String>, String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    Ok(read_scopes(&binding_scopes_path()).get(&key).and_then(|v| v.as_str()).map(str::to_string))
+}
+
+/// `value: None` removes the limit (the binding covers the whole account again).
+#[tauri::command]
+fn set_binding_scope(project_id: String, connection_id: String, value: Option<String>) -> Result<(), String> {
+    let key = grant_key(&project_id, &connection_id)?;
+    set_scope_at(&binding_scopes_path(), &key, value.as_deref())
+}
+
+// ---- Services the user adds themselves (a name and an MCP address) ----
+// Stored in the app's own config folder, like the write switch and limits, so an
+// agent cannot add a service. The Nexus server reads the same file
+// (mcp/providers.mjs).
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct CustomService {
+    name: String,
+    #[serde(rename = "mcpUrl")]
+    mcp_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomServiceEntry {
+    slug: String,
+    name: String,
+    mcp_url: String,
+}
+
+fn custom_services_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_CUSTOM_SERVICES_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/custom-services.json")
+}
+
+fn read_custom_services(path: &std::path::Path) -> std::collections::BTreeMap<String, CustomService> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("services").cloned())
+        .and_then(|services| serde_json::from_value(services).ok())
+        .unwrap_or_default()
+}
+
+/// Names the app already knows: the built-in service list plus the two native services.
+fn built_in_service_keys() -> Vec<String> {
+    let mut keys = vec!["supabase".to_string(), "github".to_string()];
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(include_str!("../../mcp/services.json")) {
+        keys.extend(map.keys().filter(|key| !key.starts_with('_')).cloned());
+    }
+    keys
+}
+
+/// A custom service name is one word of letters, digits and hyphens, so its
+/// lowercase form is also its keychain and manifest key.
+fn custom_service_slug(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let ok = (2..=40).contains(&name.len())
+        && name.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !ok {
+        return Err("Use 2 to 40 letters, numbers or hyphens for the name, with no spaces (for example Acme or my-crm).".to_string());
+    }
+    Ok(name.to_ascii_lowercase())
+}
+
+fn add_custom_service_at(path: &std::path::Path, name: &str, mcp_url: &str) -> Result<CustomServiceEntry, String> {
+    let slug = custom_service_slug(name)?;
+    if built_in_service_keys().contains(&slug) {
+        return Err(format!("{} is already in Nexus. Pick it from the list instead.", name.trim()));
+    }
+    let url = mcp_oauth::check_service_url(mcp_url)?.to_string();
+    if url.len() > 300 {
+        return Err("That address is too long.".to_string());
+    }
+    let mut services = read_custom_services(path);
+    if services.contains_key(&slug) {
+        return Err(format!("You already added a service called {}. Remove it first to change its address.", name.trim()));
+    }
+    services.insert(slug.clone(), CustomService { name: name.trim().to_string(), mcp_url: url.clone() });
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this service.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "services": services })).map_err(|_| "Nexus could not save this service.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this service.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this service.".to_string())?;
+    Ok(CustomServiceEntry { slug, name: name.trim().to_string(), mcp_url: url })
+}
+
+fn remove_custom_service_at(path: &std::path::Path, slug: &str) -> Result<(), String> {
+    let mut services = read_custom_services(path);
+    if services.remove(slug).is_none() {
+        return Ok(());
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "services": services })).map_err(|_| "Nexus could not save this change.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this change.".to_string())?;
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this change.".to_string())
+}
+
+#[tauri::command]
+fn list_custom_services() -> Vec<CustomServiceEntry> {
+    read_custom_services(&custom_services_path())
+        .into_iter()
+        .map(|(slug, service)| CustomServiceEntry { slug, name: service.name, mcp_url: service.mcp_url })
+        .collect()
+}
+
+#[tauri::command]
+fn add_custom_service(name: String, mcp_url: String) -> Result<CustomServiceEntry, String> {
+    add_custom_service_at(&custom_services_path(), &name, &mcp_url)
+}
+
+#[tauri::command]
+fn remove_custom_service(slug: String) -> Result<(), String> {
+    custom_service_slug(&slug)?;
+    remove_custom_service_at(&custom_services_path(), &slug)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|_| {
+        .setup(|app| {
             // A new desktop process always starts locked. The HTTP bridge treats
             // a missing state file as locked as well, so a crash cannot leave a
             // stale unlocked state behind for normal app startup.
             let _ = write_vault_state(true);
+            // Bring the local Nexus server up in the background so agents have
+            // something to reach without a terminal.
+            let handle = app.handle().clone();
+            thread::spawn(move || { let _ = ensure_nexus_server_running(&handle); });
             Ok(())
         })
-        .on_window_event(|_, event| {
+        .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let _ = write_vault_state(true);
+                { use tauri::Manager; stop_nexus_server(window.app_handle()); }
             }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(OAuthManager::default())
+        .manage(NexusServer::default())
+        .manage(McpOAuthManager::default())
         // IMPORTANT: Tauri converts each command parameter name to lowerCamelCase
         // before matching request args. The frontend must therefore send camelCase
         // keys (workspacePath, projectId, …) even though Rust names stay snake_case.
@@ -2323,7 +3037,22 @@ pub fn run() {
             import_agent_entry,
             remove_agent_entry,
             test_agent_setup,
-            node_binary_path
+            node_binary_path,
+            ensure_nexus_server,
+            github_status,
+            start_github_device_flow,
+            poll_github_device_flow,
+            list_github_repos,
+            start_mcp_oauth,
+            poll_mcp_oauth,
+            cancel_mcp_oauth,
+            get_write_grant,
+            set_write_grant,
+            get_binding_scope,
+            set_binding_scope,
+            list_custom_services,
+            add_custom_service,
+            remove_custom_service
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");
@@ -2333,6 +3062,96 @@ pub fn run() {
 mod agent_setup_tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn write_grants_round_trip_and_stay_per_binding() {
+        let dir = std::env::temp_dir().join(format!("nexus-grants-test-{}", std::process::id()));
+        let path = dir.join("write-grants.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_grants(&path).is_empty(), "missing file means no grants");
+        set_grant_at(&path, "koupa:koupa-ln", true).unwrap();
+        set_grant_at(&path, "koupa:other", true).unwrap();
+        assert_eq!(read_grants(&path).get("koupa:koupa-ln").and_then(|v| v.as_bool()), Some(true));
+        set_grant_at(&path, "koupa:koupa-ln", false).unwrap();
+        assert!(read_grants(&path).get("koupa:koupa-ln").is_none());
+        assert_eq!(read_grants(&path).get("koupa:other").and_then(|v| v.as_bool()), Some(true), "turning one off leaves the others");
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_grants(&path).is_empty(), "a damaged file means no grants");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_binding_limit_round_trips_stays_per_binding_and_rejects_junk() {
+        let dir = std::env::temp_dir().join(format!("nexus-scopes-test-{}", std::process::id()));
+        let path = dir.join("binding-scopes.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_scopes(&path).is_empty());
+        set_scope_at(&path, "koupa:koupa-ln", Some("  proj-1 ")).unwrap();
+        set_scope_at(&path, "koupa:other", Some("proj-2")).unwrap();
+        assert_eq!(read_scopes(&path).get("koupa:koupa-ln").and_then(|v| v.as_str()), Some("proj-1"), "trimmed");
+        set_scope_at(&path, "koupa:koupa-ln", None).unwrap();
+        assert!(read_scopes(&path).get("koupa:koupa-ln").is_none());
+        assert_eq!(read_scopes(&path).get("koupa:other").and_then(|v| v.as_str()), Some("proj-2"));
+        assert!(set_scope_at(&path, "k:c", Some("   ")).is_err());
+        assert!(set_scope_at(&path, "k:c", Some("a\nb")).is_err());
+        assert!(set_scope_at(&path, "k:c", Some(&"x".repeat(201))).is_err());
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_scopes(&path).is_empty(), "a damaged file means no limit");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_services_are_validated_saved_and_removed() {
+        let dir = std::env::temp_dir().join(format!("nexus-custom-test-{}", std::process::id()));
+        let path = dir.join("custom-services.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_custom_services(&path).is_empty());
+        let added = add_custom_service_at(&path, "Acme", "https://mcp.acme.io/mcp").unwrap();
+        assert_eq!((added.slug.as_str(), added.name.as_str()), ("acme", "Acme"));
+        assert_eq!(read_custom_services(&path).get("acme").map(|s| s.mcp_url.as_str()), Some("https://mcp.acme.io/mcp"));
+        // The same name twice, and built-in names, are refused.
+        assert!(add_custom_service_at(&path, "acme", "https://other.acme.io/mcp").is_err());
+        for taken in ["Linear", "Supabase", "GitHub", "notion"] {
+            assert!(add_custom_service_at(&path, taken, "https://mcp.example.com/mcp").is_err(), "{taken}");
+        }
+        // Names that could not be a keychain or manifest key are refused.
+        for bad in ["", "a", "my crm", "acme:x", "-acme", "ac/me", "über", &"x".repeat(41)] {
+            assert!(add_custom_service_at(&path, bad, "https://mcp.example.com/mcp").is_err(), "{bad:?}");
+        }
+        // Unsafe addresses are refused.
+        for bad in ["http://mcp.example.com", "https://127.0.0.1/mcp", "https://localhost/mcp", "https://user:pw@mcp.example.com"] {
+            assert!(add_custom_service_at(&path, "Other", bad).is_err(), "{bad}");
+        }
+        assert_eq!(read_custom_services(&path).len(), 1);
+        remove_custom_service_at(&path, "acme").unwrap();
+        assert!(read_custom_services(&path).is_empty());
+        remove_custom_service_at(&path, "acme").unwrap();
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_custom_services(&path).is_empty(), "a damaged file means no custom services");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grant_keys_reject_anything_that_could_escape() {
+        assert_eq!(grant_key("koupa", "koupa-ln").unwrap(), "koupa:koupa-ln");
+        assert!(grant_key("koupa:x", "c").is_err());
+        assert!(grant_key("", "c").is_err());
+        assert!(grant_key("p", "../c").is_err());
+    }
+
+    #[test]
+    fn node_versions_parse_to_a_major() {
+        assert_eq!(parse_node_major("v20.11.1\n"), Some(20));
+        assert_eq!(parse_node_major("v18.0.0"), Some(18));
+        assert_eq!(parse_node_major("26.3.0"), Some(26));
+        assert_eq!(parse_node_major("not node"), None);
+    }
+
+    #[test]
+    fn server_script_is_found_in_the_source_checkout() {
+        let script = nexus_server_script(None).expect("source checkout has the server script");
+        assert!(script.ends_with("nexus-http-server.mjs"));
+    }
 
     // The HTTP bridge refuses a request that names no workspace, so every
     // registration Nexus writes must carry this project's path.

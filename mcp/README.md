@@ -19,6 +19,8 @@ Canonical agent surface (§6) — dotted is canonical, listed:
   Any other `<provider>__*` resolves through the self-added passthrough (approval_required, no provider contact).
 
 Native (`mcp/providers.mjs`): Supabase + GitHub are reviewed operation-by-operation.
+The server reads approvals through the `nexus-keyring` helper (`nexus-keyring <supabase|github> <project-id> <connection-id>`), which looks up the OS-keychain entry `mcp:<provider>:<project-id>:<connection-id>` and prints its JSON (`accessToken` or `token`). The desktop app writes the Supabase entry after browser approval and the GitHub entry after the GitHub device-flow approval ([setup](../docs/github-app-setup.md)). For GitHub, the helper also renews an expiring token before printing it.
+
 GitHub read-only allowlist: `search_*`, `get_*`, `list_*` repo/issue/PR/workflow reads; writes
 (`create_*`, `update_*`, deletes) blocked by deterministic policy. GitHub upstream URL is
 `NEXUS_GITHUB_MCP_URL` (default `https://api.githubcopilot.com/mcp` — verify against your
@@ -62,7 +64,7 @@ Agents reach one persistent local Nexus over HTTP:
   Nexus never falls back to the directory it was started in — otherwise a single
   global registration would hand every agent whatever project the server happens
   to be running from. Register Nexus per project so each agent sends its own
-  workspace; the desktop Agents tab writes that project's path into the agent's
+  workspace; the desktop app (Accounts → Agents) writes that project's path into the agent's
   own config. An established MCP session stays pinned to the workspace it was
   created with and does not have to resend the header.
 - The standalone HTTP bridge enables fail-closed vault locking. It reads the
@@ -93,12 +95,12 @@ Register per project, not once globally: the workspace is what tells Nexus which
 project the agent is in, so each project needs its own entry. Verify each CLI's
 own flag for custom headers before relying on it — where an agent has no header
 support, the `?workspace=` query form above carries the same value, and the
-desktop Agents tab writes the config entry directly. A registration with neither
+desktop app (Accounts → Agents) writes the config entry directly. A registration with neither
 is refused rather than silently defaulted.
 
 Live test before use: `GET http://localhost:3939/healthz` should return
 `{"ok":true,…}`, and `GET http://localhost:3939/context?workspace=<path>`
-returns the safe connection identity (no secrets). The desktop Agents tab
+returns the safe connection identity (no secrets). The desktop app (Accounts → Agents)
 probes the same `/healthz` and reports `httpReachable` per agent, and lists
 existing direct MCP entries that do not match the Nexus HTTP URL as
 `found,unmanaged`.

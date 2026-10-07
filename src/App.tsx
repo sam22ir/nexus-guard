@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { desktopAvailable, hasPublishableKey, listSupabaseProjects, lockVault, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
-import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
+import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
+import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, setCustomServices, type CustomService, saveAccounts, saveProjects, startingAccounts, startingProjects, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
 import { ThemeButton, initTheme } from "./onboarding";
+import { useAuditLog } from "./app/audit";
 import { FirstRun } from "./views/FirstRun";
+import { ProjectPage } from "./views/ProjectPage";
+import { ConnectionsPage } from "./views/ConnectionsPage";
 import { Button } from "@heroui/react";
 import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
-import { type View, type ErrorRetry, type ErrorRecord } from "./app/types";
+import { type View, type NavTarget, type ProjectTab, type ConnectionsTab, type ErrorRetry, type ErrorRecord } from "./app/types";
 import { GUARD_VISIBLE } from "./app/styles";
 import { errorIdentity, loadErrorLog } from "./app/errors";
 import { Overview } from "./views/OverviewView";
-import { ProjectsView } from "./views/ProjectsView";
 import { AgentsView } from "./views/AgentsView";
 import { BindingsView } from "./views/BindingsView";
 import { ServicesView } from "./views/ServicesView";
@@ -30,6 +32,8 @@ import "./App.css";
 
 function App() {
   const [view, setView] = useState<View>("home");
+  const [projectTab, setProjectTab] = useState<ProjectTab>("status");
+  const [connectionsTab, setConnectionsTab] = useState<ConnectionsTab>("accounts");
   const [projects, setProjects] = useState<Project[]>(loadProjects);
   const [accounts, setAccounts] = useState<Account[]>(loadAccounts);
   const [selectedProject, setSelectedProject] = useState(() => window.localStorage.getItem("nexus-guard.selected-project") ?? "koupa");
@@ -47,8 +51,14 @@ function App() {
   const [notice, setNotice] = useState("");
   const [errorLog, setErrorLog] = useState<ErrorRecord[]>(loadErrorLog);
   const [osUser, setOsUser] = useState("Local");
-  const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
-  const project = useMemo(() => projects.find((item) => item.id === selectedProject || item.name === selectedProject) ?? projects[0], [projects, selectedProject]);
+  // Lookups made in the same tick as a new account (add-binding creates one inline) must see it.
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
+  const project = useMemo<Project | undefined>(() => projects.find((item) => item.id === selectedProject || item.name === selectedProject) ?? projects[0], [projects, selectedProject]);
+  // Setup counts as done once any agent has called Nexus. A skipped setup resumes at the agent step for the selected real project.
+  const { entries: auditEntries, loaded: auditLoaded } = useAuditLog(projects);
+  const setupIncomplete = auditLoaded && !auditEntries.some((entry) => entry.agent);
+  const resumeProject = project && setupIncomplete && !starterProjects.some((item) => item.id === project.id) ? project : null;
 
   // Theme ownership lives in onboarding.tsx (initTheme/ThemeToggle):
   // apply the stored/OS choice once at boot. First paint is already
@@ -81,7 +91,7 @@ function App() {
     const message =
       where === "Saving project file" || where === "Linking Supabase project"
         ? "Nexus could not write the project file. Check the folder still exists and is writable, then retry."
-        : where === "Removing connection"
+        : where === "Removing binding"
           ? "The project file still lists this connection. Retry to finish removing it."
           : "Something failed. Try again, and check Activity if it keeps happening.";
     console.error(`[nexus] ${where}`, error);
@@ -148,7 +158,7 @@ function App() {
 
   function selectProject(id: string) {
     setSelectedProject(id);
-    setView("overview");
+    navigate("overview");
   }
 
   function dismissOnboarding() {
@@ -189,7 +199,7 @@ function App() {
     };
     setProjects((current) => [...current, newProject]);
     setSelectedProject(newProject.id);
-    if (!options?.stay) { setView("overview"); setModal(null); }
+    if (!options?.stay) { navigate("overview"); setModal(null); }
     // Manifest sync (paper: discovery != registration — local create is not
     // on-disk until the project file is written). Runs async; the local
     // create above is already done so the UI never blocks on the backend.
@@ -199,7 +209,7 @@ function App() {
         const inspection = await invoke<{ exists: boolean; is_dir: boolean }>("inspect_project_folder", { workspacePath: newProject.path });
         if (!inspection.exists || !inspection.is_dir) {
           if (!window.confirm(`Project folder “${newProject.path}” does not exist yet. Create it now?`)) {
-            setNotice("Project saved here. Its folder does not exist yet — create it, then verify on Overview so agents resolve it.");
+            setNotice("Project saved here. Its folder does not exist yet — create it, then check the project file on the Project page so agents resolve it.");
             return;
           }
           await invoke<string>("create_project_folder", { workspacePath: newProject.path });
@@ -223,10 +233,10 @@ function App() {
             repo: newProject.repo && newProject.repo !== "Not connected" ? newProject.repo : null,
             branch: newProject.branch ?? null,
           });
-          setNotice(`Saved the safe Nexus project file at ${filePath}. Link a service under Services, then bind it, to add its resource.`);
+          setNotice(`Saved the safe Nexus project file at ${filePath}. Add a binding from the Project page to attach a resource.`);
         } catch (error) {
           reportError("Saving project file", error);
-          setNotice("Project saved here, but Nexus could not write the project file. Check the folder still exists and is writable, then verify on Overview.");
+          setNotice("Project saved here, but Nexus could not write the project file. Check the folder still exists and is writable, then check the project file on the Project page.");
         }
         return;
       }
@@ -254,11 +264,11 @@ function App() {
     if (old.branch !== (patch.branch || "main")) diffLines.push(`branch: “${old.branch}” → “${patch.branch || "main"}”`);
     if (old.environment !== patch.environment) diffLines.push(`environment: “${old.environment}” → “${patch.environment}”`);
     if (diffLines.length === 0) { setModal(null); return; }
-    if (!window.confirm(`Update project “${old.name}”?\n\n${diffLines.join("\n")}\n\nAgents resolve the on-disk file until re-saved — re-verify the folder on Overview afterwards.`)) return;
+    if (!window.confirm(`Update project “${old.name}”?\n\n${diffLines.join("\n")}\n\nAgents resolve the on-disk file until re-saved — re-check the project file on the Project page afterwards.`)) return;
     const updated: Project = { ...old, name: patch.name, initials: initialsFor(patch.name), path: patch.path, repo: patch.repo || "Not connected", branch: patch.branch || "main", environment: patch.environment, lastSeen: "Updated just now" };
     setProjects((current) => current.map((item) => item.id === projectId ? updated : item));
     setModal(null);
-    setNotice("Project updated. Re-verify the folder on Overview so agents resolve the new details.");
+    setNotice("Project updated. Re-check the project file on the Project page so agents resolve the new details.");
     // Best-effort manifest re-sync for the new workspace details.
     void (async () => {
       if (!desktopAvailable()) return;
@@ -275,17 +285,15 @@ function App() {
   async function removeProject(projectId: string) {
     const target = projects.find((item) => item.id === projectId);
     if (!target) return;
-    if (projects.length <= 1) {
-      setNotice("Keep at least one project. Edit it instead of removing the last one.");
-      return;
-    }
     if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from this desktop vault.`)) return;
     for (const connection of target.connections) {
-      await removeMcpTokens(projectId, connection.id).catch(() => undefined);
+      await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
+      await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
+      await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
     }
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);
-    if (selectedProject === projectId) setSelectedProject(remaining[0].id);
+    if (selectedProject === projectId) setSelectedProject(remaining[0]?.id ?? "");
     setNotice(`Project ${target.name} removed, approvals deleted from this vault. Its folders on disk are untouched.`);
   }
 
@@ -313,7 +321,7 @@ function App() {
       ? { ...item, connections: item.connections.map((c) => c.id === connectionId ? updatedConnection : c) }
       : item));
     setModal(null);
-    setNotice("Connection updated. Nexus re-saved the on-disk project file.");
+    setNotice("Binding updated. Nexus re-saved the on-disk project file.");
     void (async () => {
       if (!desktopAvailable()) return;
       try {
@@ -351,7 +359,7 @@ function App() {
 
   function addConnection(input: { provider: string; target: string; detail: string; tone: Connection["tone"]; method: Connection["method"]; authState: Connection["authState"]; projectRef?: string; url?: string; accountId?: string }) {
     if (!project) return;
-    const accountEntry = accounts.find((a) => a.id === input.accountId && a.provider.toLowerCase() === input.provider.toLowerCase());
+    const accountEntry = accountsRef.current.find((a) => a.id === input.accountId && a.provider.toLowerCase() === input.provider.toLowerCase());
     const accountId = accountEntry?.id;
     const accountLabel = accountEntry?.label;
     const newConnection: Connection = {
@@ -377,7 +385,7 @@ function App() {
     const owner = project;
     void syncNexusProjectFile(owner, newConnection).then((filePath) => {
       if (filePath) setNotice(`Saved the safe Nexus project file at ${filePath}.`);
-    }).catch((error) => { reportError("Saving project file", error, { kind: "write-file", projectId: owner.id, connectionId: newConnection.id }); setNotice("Connection saved, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity."); });
+    }).catch((error) => { reportError("Saving project file", error, { kind: "write-file", projectId: owner.id, connectionId: newConnection.id }); setNotice("Binding saved, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity."); });
   }
 
   /** Retry a kept failure from the Activity error log. */
@@ -392,7 +400,7 @@ function App() {
     const target = projects.find((item) => item.id === retryProjectId);
     const connection = target?.connections.find((c) => c.id === retryConnectionId);
     if (!target || !connection) {
-      setNotice("That connection is gone, so there is nothing to retry. The error is kept for reference.");
+      setNotice("That binding is gone, so there is nothing to retry. The error is kept for reference.");
       return;
     }
     if (retryKind === "remove") {
@@ -429,7 +437,7 @@ function App() {
   }
 
   type McpOAuthTokens = { accessToken: string; refreshToken?: string; scope?: string };
-  type SupabaseChoice = { ref: string; name: string; region?: string | null };
+  type SupabaseChoice = { ref: string; name: string; region?: string | null; organization_name?: string | null };
 
   /** Backend detail is never shown — surface the plain fallback with its next step. */
   function commandMessage(_error: unknown, fallback: string): string {
@@ -449,7 +457,7 @@ function App() {
 
   async function pollMcpOAuth(signal?: AbortSignal): Promise<McpOAuthTokens> {
     function cancelledError(): Error {
-      const error = new Error("The connection request was cancelled.");
+      const error = new Error("The browser approval was cancelled.");
       error.name = "AbortError";
       return error;
     }
@@ -460,11 +468,211 @@ function App() {
       if (signal?.aborted) throw cancelledError();
       const result = await invoke<OAuthResult | null>("poll_supabase_mcp_oauth");
       if (result) {
-        if (!result.success || !result.access_token) throw new Error("The browser approval timed out. Start the connection again and approve within a few minutes.");
+        if (!result.success || !result.access_token) throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
         return { accessToken: result.access_token, refreshToken: result.refresh_token, scope: result.scope };
       }
     }
-    throw new Error("The browser approval timed out. Start the connection again and approve within a few minutes.");
+    throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
+  }
+
+  // ---- Services the user added themselves (a name and an MCP address) ----
+  const [customServices, setCustomServiceState] = useState<CustomService[]>([]);
+  async function refreshCustomServices() {
+    if (!desktopAvailable()) return;
+    const list = await invoke<CustomService[]>("list_custom_services").catch(() => [] as CustomService[]);
+    setCustomServices(list);
+    setCustomServiceState(list);
+  }
+  useEffect(() => { void refreshCustomServices(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function addCustomService(name: string, mcpUrl: string): Promise<void> {
+    if (!desktopAvailable()) throw new Error("Open the desktop app to add a service.");
+    try {
+      await invoke("add_custom_service", { name, mcpUrl });
+    } catch (error) {
+      throw new Error(githubText(error, "Could not add this service. Check the name and address, then try again."));
+    }
+    await refreshCustomServices();
+    setNotice(`${name} added. Link an account and add a binding to sign in to it.`);
+  }
+
+  async function removeCustomService(entry: CustomService) {
+    const using = projects.filter((item) => item.connections.some((c) => c.provider.toLowerCase() === entry.slug));
+    if (!window.confirm(`Remove ${entry.name} from Nexus?${using.length ? `\n\nIt is bound in ${using.map((item) => item.name).join(", ")}. Those bindings will stop working until you add the service again.` : ""}`)) return;
+    await invoke("remove_custom_service", { slug: entry.slug }).catch(() => undefined);
+    await refreshCustomServices();
+    setNotice(`${entry.name} removed.`);
+  }
+
+  // ---- Any other service on the launch list: sign in with its own remote MCP server ----
+
+  /** Sign in to a service, then save the binding. Rejects with a plain-language message; cancelling
+   *  or failing removes the pending binding and anything saved for it. */
+  async function connectRemoteService(provider: string, accountId: string | undefined, signal: AbortSignal): Promise<void> {
+    const url = remoteServiceUrl(provider);
+    if (!url) throw new Error(`${provider} cannot be connected this way yet.`);
+    if (!project) throw new Error("No project is selected. Select a project before connecting.");
+    if (!desktopAvailable()) throw new Error("Open the desktop app to connect a service.");
+    const owner = project;
+    const slug = serviceSlug(provider);
+    const name = PROVIDER_CATALOG.find((entry) => entry.provider.toLowerCase() === slug)?.provider ?? provider;
+    const accountEntry = accountId ? accountsRef.current.find((a) => a.id === accountId) : undefined;
+    const pending: Connection = {
+      id: makeId("connection"),
+      provider: name,
+      short: initialsFor(name),
+      target: name,
+      resource: name,
+      accountId: accountEntry?.id,
+      account: accountEntry?.label ?? accountEntry?.id,
+      environment: owner.environment ?? "development",
+      detail: "Whole account",
+      tone: "blue",
+      state: "Needs review",
+      method: "mcp",
+      authState: "pending",
+    };
+    setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: [...item.connections, pending] } : item));
+    const cleanUp = async () => {
+      await invoke("cancel_mcp_oauth").catch(() => undefined);
+      await removeMcpTokens(owner.id, pending.id, slug).catch(() => undefined);
+      setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: item.connections.filter((c) => c.id !== pending.id) } : item));
+    };
+    try {
+      const started = await invoke<{ authorization_url: string }>("start_mcp_oauth", { serverUrl: url, service: slug, projectId: owner.id, connectionId: pending.id }).catch((error) => {
+        throw new Error(githubText(error, `Could not start the ${name} sign-in. Try again.`));
+      });
+      await openUrl(started.authorization_url);
+      for (let attempt = 0; attempt < 860; attempt += 1) {
+        if (signal.aborted) { const cancelled = new Error(`The ${name} sign-in was cancelled.`); cancelled.name = "AbortError"; throw cancelled; }
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        const result = await invoke<{ success: boolean; error?: string | null } | null>("poll_mcp_oauth");
+        if (!result) continue;
+        if (!result.success) throw new Error(result.error || `${name} did not complete the sign-in. Try again.`);
+        const connected: Connection = { ...pending, authState: "connected" };
+        setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: item.connections.map((c) => c.id === pending.id ? connected : c) } : item));
+        setModal(null);
+        try {
+          const filePath = await syncNexusProjectFile(owner, connected, "connected");
+          setNotice(`${name} is connected${connected.account ? ` as “${connected.account}”` : ""}. ${filePath ? `Nexus wrote ${filePath}. ` : ""}It can read your whole ${name} account; anything that changes data needs your approval.`);
+        } catch (error) {
+          reportError(`Linking ${name}`, error, { kind: "link", projectId: owner.id, connectionId: pending.id });
+          setNotice("Connected, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity.");
+        }
+        return;
+      }
+      throw new Error(`The ${name} sign-in timed out. Start again and approve within a few minutes.`);
+    } catch (error) {
+      await cleanUp();
+      throw error;
+    }
+  }
+
+  // ---- GitHub: the user approves Nexus with their own GitHub account (device flow) ----
+  const [githubStatus, setGithubStatus] = useState<{ configured: boolean; install_url?: string | null }>({ configured: false });
+  useEffect(() => {
+    if (!desktopAvailable()) return;
+    invoke<{ configured: boolean; install_url?: string | null }>("github_status").then(setGithubStatus).catch(() => undefined);
+  }, []);
+
+  type GithubRepoChoice = { full_name: string; private: boolean };
+  const githubText = (error: unknown, fallback: string) => (typeof error === "string" && error ? error : fallback);
+
+  /** Step 1: ask GitHub for a code and open its approval page. Adds a pending binding that cancel or failure removes. */
+  async function githubStart(): Promise<{ connectionId: string; userCode: string; verificationUri: string; deviceCode: string; interval: number; expiresIn: number }> {
+    if (!project) throw new Error("No project is selected. Select a project before connecting.");
+    if (!desktopAvailable()) throw new Error("Open the desktop app to connect GitHub.");
+    const owner = project;
+    let flow: { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
+    try {
+      flow = await invoke("start_github_device_flow");
+    } catch (error) {
+      throw new Error(githubText(error, "Could not start the GitHub sign-in. Try again."));
+    }
+    const connection: Connection = {
+      id: makeId("connection"),
+      provider: "GitHub",
+      short: "GH",
+      target: "GitHub",
+      resource: "GitHub",
+      environment: owner.environment ?? "development",
+      detail: "Code and issues",
+      tone: "blue",
+      state: "Needs review",
+      method: "mcp",
+      authState: "pending",
+    };
+    setProjects((current) => current.map((item) => item.id === owner.id ? { ...item, connections: [...item.connections, connection] } : item));
+    pendingMcp.current = { projectId: owner.id, connectionId: connection.id };
+    await openUrl(flow.verification_uri).catch(() => undefined);
+    return { connectionId: connection.id, userCode: flow.user_code, verificationUri: flow.verification_uri, deviceCode: flow.device_code, interval: flow.interval, expiresIn: flow.expires_in };
+  }
+
+  async function githubDropPending(projectId: string, connectionId: string) {
+    await removeMcpTokens(projectId, connectionId, "github").catch(() => undefined);
+    setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connectionId) } : item));
+    if (pendingMcp.current?.connectionId === connectionId) pendingMcp.current = null;
+  }
+
+  /** Step 2: wait for the user to approve, then list the repositories the Nexus GitHub App can see. */
+  async function githubWait(start: { connectionId: string; deviceCode: string; interval: number; expiresIn: number }, signal: AbortSignal): Promise<{ login: string | null; repos: GithubRepoChoice[] }> {
+    const projectId = pendingMcp.current?.projectId ?? project?.id ?? "";
+    let wait = Math.max(1, start.interval);
+    const deadline = Date.now() + start.expiresIn * 1000;
+    try {
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, wait * 1000));
+        if (signal.aborted) { const cancelled = new Error("The GitHub approval was cancelled."); cancelled.name = "AbortError"; throw cancelled; }
+        let result: { status: string; login?: string | null };
+        try {
+          result = await invoke("poll_github_device_flow", { deviceCode: start.deviceCode, projectId, connectionId: start.connectionId });
+        } catch (error) {
+          throw new Error(githubText(error, "Could not finish the GitHub sign-in. Try again."));
+        }
+        if (result.status === "slow_down") wait += 5;
+        if (result.status === "denied") throw new Error("GitHub approval was declined. Start again if that was a mistake.");
+        if (result.status === "expired") throw new Error("The GitHub code expired. Start again and approve within a few minutes.");
+        if (result.status === "done") {
+          const repos = await githubRepos(start.connectionId, projectId).catch(() => [] as GithubRepoChoice[]);
+          return { login: result.login ?? null, repos };
+        }
+      }
+      throw new Error("The GitHub code expired. Start again and approve within a few minutes.");
+    } catch (error) {
+      await githubDropPending(projectId, start.connectionId);
+      throw error;
+    }
+  }
+
+  async function githubRepos(connectionId: string, projectId?: string): Promise<GithubRepoChoice[]> {
+    const owner = projectId ?? pendingMcp.current?.projectId ?? project?.id ?? "";
+    try {
+      return await invoke<GithubRepoChoice[]>("list_github_repos", { projectId: owner, connectionId });
+    } catch (error) {
+      throw new Error(githubText(error, "Could not load your GitHub repositories. Try again."));
+    }
+  }
+
+  /** Step 3: bind the chosen repository. The account is named after the GitHub user. */
+  async function githubConfirm(ownerProjectId: string, connectionId: string, repo: string, login: string | null) {
+    const owner = projects.find((item) => item.id === ownerProjectId);
+    const linked = owner?.connections.find((c) => c.id === connectionId);
+    if (!owner || !linked) throw new Error("That GitHub request is gone. Start again.");
+    const accountId = createAccount({ provider: "GitHub", label: login?.trim() || "personal" });
+    const accountEntry = accountsRef.current.find((a) => a.id === accountId);
+    const sharedWith = projects.filter((item) => item.id !== ownerProjectId && item.connections.some((c) => c.provider === "GitHub" && c.accountId === accountId));
+    const connected: Connection = { ...linked, accountId, account: accountEntry?.label ?? accountId, target: repo, resource: repo, authState: "connected" };
+    setProjects((current) => current.map((item) => item.id === ownerProjectId ? { ...item, connections: item.connections.map((c) => c.id === connectionId ? connected : c) } : item));
+    pendingMcp.current = null;
+    setModal(null);
+    try {
+      const filePath = await syncNexusProjectFile(owner, connected, "connected");
+      const shared = sharedWith.length > 0 ? ` This GitHub account is also used by ${sharedWith.map((item) => item.name).join(", ")}.` : "";
+      setNotice(`GitHub is connected to ${repo} as “${connected.account}”.${filePath ? ` Nexus wrote ${filePath}.` : ""}${shared}`);
+    } catch (error) {
+      reportError("Linking GitHub repository", error, { kind: "link", projectId: ownerProjectId, connectionId });
+      setNotice("Connected, but Nexus could not write the project file. Check the folder still exists and is writable, then retry from Activity.");
+    }
   }
 
   /** Step 1 of connect-first MCP: browser approval + token save under a pending connection. Returns the user's Supabase projects to pick from. */
@@ -475,7 +683,7 @@ function App() {
     // browser approval is in flight, and the pending binding belongs here.
     const owner = project;
     const projectId = owner.id;
-    const accountEntry = accountId ? accounts.find((a) => a.id === accountId) : undefined;
+    const accountEntry = accountId ? accountsRef.current.find((a) => a.id === accountId) : undefined;
     const connection: Connection = {
       id: makeId("connection"),
       provider: "Supabase",
@@ -527,9 +735,16 @@ function App() {
     // switched projects while the browser approval was in flight.
     const owner = projects.find((item) => item.id === ownerProjectId);
     const linked: Connection | undefined = owner?.connections.find((c) => c.id === connectionId);
-    if (!owner || !linked) throw new Error("That connection request is gone. Start the connection again.");
+    if (!owner || !linked) throw new Error("That approval request is gone. Start again.");
+    // The approval proves which Supabase account this is, so name ours after its organization
+    // and reuse it for every project in that organization. An account picked earlier is kept.
+    const accountId = linked.accountId ?? createAccount({ provider: "Supabase", label: choice.organization_name?.trim() || "personal" });
+    const accountEntry = accountsRef.current.find((a) => a.id === accountId);
+    const sharedWith = projects.filter((item) => item.id !== ownerProjectId && item.connections.some((c) => c.provider === "Supabase" && c.accountId === accountId));
     const connectedConnection: Connection = {
       ...linked,
+      accountId,
+      account: accountEntry?.label ?? accountId,
       target: choice.name,
       resource: choice.name,
       projectRef: choice.ref,
@@ -540,8 +755,8 @@ function App() {
     setModal(null);
     try {
       const filePath = await syncNexusProjectFile(owner, connectedConnection, "connected");
-      const unlinked = !connectedConnection.accountId && !connectedConnection.account;
-      const suffix = unlinked ? " No Services account is linked — open Bindings → Edit on this connection to pick one so the topology shows the right login." : " Its approval is stored in the desktop vault.";
+      const shared = sharedWith.length > 0 ? ` This Supabase account is also used by ${sharedWith.map((item) => item.name).join(", ")}, so one credential reaches all of them.` : "";
+      const suffix = ` Linked to your Supabase account “${connectedConnection.account}”. Its approval is stored in the desktop vault.${shared}`;
       setNotice(filePath ? `Supabase is connected. Nexus wrote ${filePath}.${suffix}` : `Supabase is connected.${suffix}`);
     } catch (error) {
       reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId });
@@ -553,7 +768,8 @@ function App() {
     // Stop a still-running browser-approval poll first; its cleanup removes
     // the same pending connection, and both paths are idempotent.
     if (pendingMcp.current?.connectionId === connectionId) abortMcpAuthorize();
-    await removeMcpTokens(ownerProjectId, connectionId).catch(() => undefined);
+    const pendingProvider = projects.find((item) => item.id === ownerProjectId)?.connections.find((c) => c.id === connectionId)?.provider;
+    await removeMcpTokens(ownerProjectId, connectionId, pendingProvider).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === ownerProjectId ? { ...item, connections: item.connections.filter((c) => c.id !== connectionId) } : item));
   }
 
@@ -564,7 +780,9 @@ function App() {
     const projectId = holder.id;
     setNotice("");
     // Best-effort vault cleanup first; a missing entry is not an error.
-    await removeMcpTokens(projectId, connection.id).catch(() => undefined);
+    await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
+    await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
+    await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
     await removePublishableKey(projectId, connection.id).catch(() => undefined);
     setProjects((current) => current.map((item) => item.id === projectId ? { ...item, connections: item.connections.filter((c) => c.id !== connection.id) } : item));
     setSavedKeys((current) => {
@@ -573,16 +791,31 @@ function App() {
       return next;
     });
     if (!desktopAvailable()) {
-      setNotice("Connection removed from this app. Open the desktop app to also unlink its Nexus project file.");
+      setNotice("Binding removed from this app. Open the desktop app to also unlink its Nexus project file.");
       return;
     }
     try {
       const filePath = await invoke<string>("remove_nexus_connection", { workspacePath: holder.path, provider: connection.provider });
-      setNotice(`Connection removed. Nexus updated ${filePath}.`);
+      setNotice(`Binding removed. Nexus updated ${filePath}.`);
     } catch (error) {
-      reportError("Removing connection", error, { kind: "remove", projectId, connectionId: connection.id });
+      reportError("Removing binding", error, { kind: "remove", projectId, connectionId: connection.id });
       setNotice("Removed here, but the project file still lists it. Retry from Activity to finish removing it.");
     }
+  }
+
+  /** Create a linked account without a notice and return its id (the existing id when the same account is already linked). */
+  function createAccount(input: { provider: string; label: string }): string {
+    const provider = input.provider.trim();
+    const label = input.label.trim() || "personal";
+    const current = accountsRef.current;
+    // Linking the same login twice reuses it. makeAccountId alone would mint "-2".
+    const existing = current.find((a) => a.provider.toLowerCase() === provider.toLowerCase() && a.label.trim().toLowerCase() === label.toLowerCase());
+    if (existing) return existing.id;
+    const id = makeAccountId(provider, label, current);
+    const next = [...current, { id, label, provider, authState: "not_connected" as const }];
+    accountsRef.current = next;
+    setAccounts(next);
+    return id;
   }
 
   function addAccount(input: { provider: string; label: string }) {
@@ -595,7 +828,7 @@ function App() {
       return;
     }
     setAccounts((current) => [...current, { id, label, provider, authState: "not_connected" }]);
-    setNotice(`${provider} account “${label}” added. Bind it to a project under Bindings.`);
+    setNotice(`${provider} account “${label}” added. Bind it to a project from the Project page (Bindings).`);
   }
 
   async function removeAccount(accountId: string) {
@@ -618,21 +851,28 @@ function App() {
     setNotice("Guard rules are hidden in this build — per-binding rules are not editable. Calls are logged on Home and Activity.");
   }
 
+  /** Open a page; older names (overview, bindings, services, agents) land on the right section. */
+  function navigate(target: NavTarget) {
+    switch (target) {
+      case "overview": case "projects": setProjectTab("status"); setView("project"); break;
+      case "bindings": setProjectTab("bindings"); setView("project"); break;
+      case "services": setConnectionsTab("accounts"); setView("connections"); break;
+      case "agents": setConnectionsTab("agents"); setView("connections"); break;
+      default: setView(target);
+    }
+  }
+
   const viewLabels: Record<View, string> = {
     home: "Home",
-    overview: "Overview",
-    projects: "Projects",
-    agents: "Agents",
-    bindings: "Bindings",
-    services: "Services",
+    project: "Project",
+    connections: "Accounts & agents",
     guard: "Guard rules",
     activity: "Activity",
     settings: "Settings",
   };
 
-  const connectedApprovals = projects.reduce((count, item) => count + item.connections.filter((c) => c.authState === "connected").length, 0);
   const currentLabel = viewLabels[view] ?? view;
-  const scopedView = view === "overview" || view === "bindings" || view === "activity";
+  const scopedView = view === "project" || view === "activity";
 
   // Connections whose account is also bound to another project (paper §6):
   // marked on the canvas and named in the link/unlink confirm steps.
@@ -649,14 +889,14 @@ function App() {
   }, [projects, accounts]);
 
   /** Drag-to-link: the canvas only asks. Open the same binding picker the
-   *  Bindings tab uses, prefilled from the drag; nothing saves until confirmed. */
+   *  Project page uses, prefilled from the drag; nothing saves until confirmed. */
   function requestLink(request: PendingLinkRequest) {
     const nodes = [request.from, request.to];
     const projectNode = nodes.find((node) => node.kind === "project");
     const serviceNode = nodes.find((node) => node.kind === "service");
     if (!projectNode || !serviceNode) {
       setNotice(nodes.some((node) => node.kind === "agent")
-        ? "Agents connect from the Agents tab, and the project they work in is resolved automatically. Drag a service onto a project to link it."
+        ? "Agents connect from Accounts, and the project they work in is resolved automatically. Drag a service onto a project to link it."
         : "Drag a service onto a project to link it.");
       return;
     }
@@ -685,36 +925,16 @@ function App() {
 
   const navItems: NavItem<View>[] = [
     { id: "home", label: "Home", icon: "home" },
-    { id: "projects", label: "Projects", icon: "folder" },
-    { id: "overview", label: "Overview", icon: "grid" },
-    { id: "bindings", label: "Bindings", icon: "link" },
+    { id: "project", label: "Project", icon: "folder" },
     { id: "activity", label: "Activity", icon: "activity" },
-    { id: "services", label: "Services", icon: "services" },
-    { id: "agents", label: "Agents", icon: "agents" },
+    { id: "connections", label: "Accounts", icon: "link" },
     ...(GUARD_VISIBLE ? [{ id: "guard" as const, label: "Guard", icon: "shield" as const }] : []),
   ];
 
   const railFooter = (
     <>
-      <div className="relative w-full">
-        <button type="button" aria-expanded={vaultMenuOpen} onClick={() => setVaultMenuOpen((open) => !open)} className="nx-nav-item" title={vaultUnlocked ? "Vault unlocked" : "Vault locked"}>
-          <NxIcon name={vaultUnlocked ? "unlock" : "lock"} size={20} />
-          {vaultUnlocked ? "Unlocked" : "Locked"}
-        </button>
-        {vaultMenuOpen && (
-          <div className="nx-notice absolute bottom-2 left-full z-40 ml-3 w-[280px] flex-col !items-stretch gap-1" style={{ boxShadow: "var(--shadow-pop)" }} role="status">
-            <strong>{vaultUnlocked ? "Desktop vault unlocked" : "Desktop vault locked"}</strong>
-            <span className="nx-muted">{connectedApprovals} approval{connectedApprovals === 1 ? "" : "s"} saved · OS keychain holds the secrets</span>
-            <span className="nx-muted">{desktopAvailable() ? "MCP approvals save without unlocking. Typed keys unlock inline." : "Open the desktop app to manage the vault."}</span>
-            <div className="mt-2 flex gap-2">
-              <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); setView("settings"); }}>Open settings</Button>
-              {vaultUnlocked && <Button size="sm" variant="outline" onPress={() => { setVaultMenuOpen(false); void lockVault().then(() => setVaultUnlocked(false)).catch(() => undefined); }}>Lock now</Button>}
-            </div>
-          </div>
-        )}
-      </div>
-      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
-        <NxIcon name="settings" size={20} />
+      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title={vaultUnlocked ? "Settings · vault unlocked" : "Settings · vault locked"}>
+        <NxIcon name={vaultUnlocked ? "unlock" : "settings"} size={20} />
         Settings
       </button>
       <span className="nx-user" title={osUser}>{osUser.slice(0, 1).toUpperCase()}</span>
@@ -726,23 +946,23 @@ function App() {
       <AppShell
         nav={navItems}
         active={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         railFooter={railFooter}
-        crumbs={scopedView ? ["Nexus", project.name] : ["Nexus"]}
+        crumbs={scopedView && project ? ["Nexus", project.name] : ["Nexus"]}
         title={currentLabel}
-        fill={view === "home" || view === "overview" || view === "bindings" || view === "services" || view === "agents"}
+        fill={view === "home" || view === "project" || view === "connections"}
         actions={
           <>
             <ThemeButton />
             {view === "home" && (
               <>
-                <Button variant="ghost" size="sm" onPress={() => setOnboardingOpen(true)}>Finish setup</Button>
-                <Button size="sm" onPress={() => setView("agents")}><NxIcon name="plus" size={15} />Connect agent</Button>
+                {setupIncomplete && <Button variant="ghost" size="sm" onPress={() => setOnboardingOpen(true)}>{resumeProject ? `Finish setting up ${resumeProject.name}` : "Finish setup"}</Button>}
+                <Button size="sm" onPress={() => navigate("agents")}><NxIcon name="plus" size={15} />Connect agent</Button>
               </>
             )}
           </>
         }
-        status={scopedView ? <Badge tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "success"} dot>{project.environment}</Badge> : undefined}
+        status={scopedView && project ? <Badge tone={project.environment.toLowerCase().startsWith("prod") ? "warning" : "success"} dot>{project.environment}</Badge> : undefined}
         banner={
           <>
             {!desktopAvailable() && (
@@ -752,47 +972,57 @@ function App() {
           </>
         }
       >
-              {view === "home" && <HomeView projects={projects} accounts={accounts} sharedConnectionIds={sharedConnectionIds} linkDraft={linkDraft} onConfirmLink={confirmLink} onCancelLink={() => setLinkDraft(null)} onContinueInPicker={() => { if (linkDraft) { setLinkPrefill({ provider: linkDraft.provider, accountId: linkDraft.accountId }); setLinkDraft(null); setModal("connection"); } }} onView={setView} onSelectProject={selectProject} onRequestLink={requestLink} onUnlink={unlinkFromCanvas} />}
-      {view === "overview" && <Overview project={project} projects={projects} accounts={accounts} onView={setView} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />}
-      {view === "projects" && <ProjectsView projects={projects} selectedProject={project.id} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)} />}
-      {view === "agents" && <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
-      {view === "bindings" && <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onSelectProject={setSelectedProject} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => setView("services")} />}
-      {view === "services" && <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => setView("bindings")} />}
+              {view === "home" && <HomeView projects={projects} accounts={accounts} sharedConnectionIds={sharedConnectionIds} linkDraft={linkDraft} onConfirmLink={confirmLink} onCancelLink={() => setLinkDraft(null)} onContinueInPicker={() => { if (linkDraft) { setLinkPrefill({ provider: linkDraft.provider, accountId: linkDraft.accountId }); setLinkDraft(null); setModal("connection"); } }} onView={navigate} onSelectProject={selectProject} onRequestLink={requestLink} onUnlink={unlinkFromCanvas} />}
+      {view === "project" && (
+        <ProjectPage project={project} projects={projects} tab={projectTab} onTab={setProjectTab} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)}>
+          {project && (projectTab === "status"
+            ? <Overview project={project} projects={projects} accounts={accounts} onView={navigate} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />
+            : <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => navigate("services")} />)}
+        </ProjectPage>
+      )}
+      {view === "connections" && (
+        <ConnectionsPage tab={connectionsTab} onTab={setConnectionsTab}>
+          {connectionsTab === "accounts"
+            ? <ServicesView projects={projects} accounts={accounts} customServices={customServices} onAddCustomService={addCustomService} onRemoveCustomService={(entry) => void removeCustomService(entry)} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => navigate("bindings")} />
+            : <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
+        </ConnectionsPage>
+      )}
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
       {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
-        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log return to starter examples. Vault approvals in the OS keychain are untouched.")) return;
+        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log are cleared. Vault approvals in the OS keychain are untouched.")) return;
         try {
           window.localStorage.removeItem("nexus-guard.projects");
           window.localStorage.removeItem("nexus-guard.accounts");
           window.localStorage.removeItem("nexus-guard.errors");
           window.localStorage.removeItem("nexus-guard.selected-project");
         } catch { /* ignore */ }
-        setProjects(starterProjects);
-        setAccounts(starterAccounts);
-        setSelectedProject(starterProjects[0].id);
+        setProjects(startingProjects());
+        setAccounts(startingAccounts());
+        setSelectedProject(startingProjects()[0]?.id ?? "");
         setErrorLog([]);
-        setView("overview");
-        setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per connection if needed.");
+        navigate("overview");
+        setNotice("Local data reset to starter examples. Keychain approvals untouched — remove those per binding if needed.");
       }} />}
       </AppShell>
 
       {onboardingOpen && (
         <FirstRun
+          resumeProject={resumeProject}
+          vaultUnlocked={vaultUnlocked}
+          onVaultUnlocked={() => setVaultUnlocked(true)}
           projects={projects}
-          accounts={accounts}
           onRegister={(input) => addProject(input, { stay: true })}
-          onAddAccount={addAccount}
           onOpenAddBinding={(projectId) => { setSelectedProject(projectId); setModal("connection"); }}
           onOpenConnectAgent={openConnectAgent}
           onSkip={dismissOnboarding}
-          onFinish={() => { dismissOnboarding(); setView("home"); }}
+          onFinish={() => { dismissOnboarding(); navigate("home"); }}
         />
       )}
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onClose={() => { setModal(null); setLinkPrefill(null); }} onOpenServices={() => { setModal(null); setLinkPrefill(null); setView("services"); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} customNames={customServices.map((entry) => entry.name)} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} remote={{ available: desktopAvailable(), connect: connectRemoteService }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );

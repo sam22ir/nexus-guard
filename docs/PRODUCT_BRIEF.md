@@ -40,8 +40,8 @@ In scope:
 - Services picker: per-project service bindings chosen in the desktop app
 - Single local HTTP transport (HTTP-only): one persistent Nexus over `http://localhost:<port>/mcp`
 - First-run onboarding: register a project, link one service, connect one agent, then a guided proof moment
-- Services tab and ~50-service catalog (Native: Supabase, GitHub; Curated via generic MCP forwarding; Self-added)
-- Agents tab: official CLI add where available, else diff + confirm + backup; live test-connection; import of existing direct MCP connections
+- Accounts page: linked accounts and the ~50-service catalog (Native: Supabase, GitHub; Curated via generic MCP forwarding; Self-added)
+- Accounts page, Agents section: official CLI add where available, else diff + confirm + backup; live test-connection; import of existing direct MCP connections
 - Home topology view: fixed columns, drag-to-link with confirm step
 - Dark and light themes
 - Multiple concurrent agent sessions isolated by project

@@ -1,27 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PROVIDER_CATALOG, tierForProvider, type Account, type Project } from "../store";
+import { PROVIDER_CATALOG, remoteServiceUrl, tierForProvider, type Account, type CustomService, type Project } from "../store";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
 import { inputClass, selectClass } from "../app/styles";
 import { Card, CardHeading } from "../app/common";
-import { AddAccountModal } from "../modals/AddAccountModal";
+import { AddCustomServiceModal } from "../modals/AddCustomServiceModal";
 
 type Service = { provider: string; tier: string; tags: string[] };
 type TierFilter = "all" | "native" | "linked";
 
 const tierTone = (tier: string): Tone => (tier === "native" ? "success" : tier === "curated" ? "info" : "warning");
 
-function howReached(tier: string): string {
+function howReached(tier: string, signedInTo: string | null, custom: boolean): string {
   if (tier === "native") return "Native adapter: every operation is reviewed. Reads are allowed, and writes stay blocked until you allow them.";
+  if (signedInTo) {
+    return `${custom ? "Added by you and not reviewed by Nexus. " : ""}Nexus signs in to ${signedInTo} and runs only the tools the service labels read-only. Safe changes need you to switch on "Allow safe writes" for a binding; anything destructive or unlabelled is refused.`;
+  }
   if (tier === "curated") return "Reached through generic MCP forwarding. Operations aren't individually reviewed, so every call stays fail-closed until you allow it.";
   return "Added by you and not reviewed by Nexus. Every call stays fail-closed until you reclassify it.";
 }
 
 /** Service catalog plus the accounts linked to each service. Linking happens
  *  inline in the detail panel; only "a service not in Nexus" uses a dialog. */
-export function ServicesView({ projects, accounts, onAddAccount, onRemoveAccount, onOpenBindings }: {
+export function ServicesView({ projects, accounts, customServices, onAddCustomService, onRemoveCustomService, onAddAccount, onRemoveAccount, onOpenBindings }: {
   projects: Project[];
   accounts: Account[];
+  customServices: CustomService[];
+  onAddCustomService: (name: string, mcpUrl: string) => Promise<void>;
+  onRemoveCustomService: (entry: CustomService) => void;
   onAddAccount: (input: { provider: string; label: string }) => void;
   onRemoveAccount: (id: string) => void;
   onOpenBindings: () => void;
@@ -34,10 +40,11 @@ export function ServicesView({ projects, accounts, onAddAccount, onRemoveAccount
 
   // Catalog entries plus any provider the developer added themselves.
   const services: Service[] = useMemo(() => {
-    const known = new Set(PROVIDER_CATALOG.map((p) => p.provider.toLowerCase()));
+    const known = new Set([...PROVIDER_CATALOG.map((p) => p.provider.toLowerCase()), ...customServices.map((c) => c.name.toLowerCase())]);
+    const added = customServices.map((c) => ({ provider: c.name, tier: "self-added", tags: ["Custom"] }));
     const custom = [...new Set(accounts.map((a) => a.provider))].filter((name) => !known.has(name.toLowerCase())).map((name) => ({ provider: name, tier: "self-added", tags: ["Self-added"] }));
-    return [...PROVIDER_CATALOG.map((p) => ({ provider: p.provider, tier: p.tier as string, tags: p.tags })), ...custom];
-  }, [accounts]);
+    return [...PROVIDER_CATALOG.map((p) => ({ provider: p.provider, tier: p.tier as string, tags: p.tags })), ...added, ...custom];
+  }, [accounts, customServices]);
 
   const accountsFor = (provider: string) => accounts.filter((a) => a.provider.toLowerCase() === provider.toLowerCase());
   const usedBy = (account: Account) => projects.filter((p) => (p.connections ?? []).some((c) => (c.accountId ?? c.account) === account.id));
@@ -107,16 +114,20 @@ export function ServicesView({ projects, accounts, onAddAccount, onRemoveAccount
             onAddAccount={onAddAccount}
             onRemoveAccount={onRemoveAccount}
             onOpenBindings={onOpenBindings}
+            customEntry={customServices.find((c) => c.name.toLowerCase() === current.provider.toLowerCase()) ?? null}
+            onRemoveCustomService={onRemoveCustomService}
           />
         )}
       </div>
 
-      {customModal && <AddAccountModal initialProvider="Other…" onClose={() => setCustomModal(false)} onSave={(input) => { onAddAccount(input); setCustomModal(false); setSelected(input.provider); }} />}
+      {customModal && <AddCustomServiceModal onClose={() => setCustomModal(false)} onSave={async (name, mcpUrl) => { await onAddCustomService(name, mcpUrl); setCustomModal(false); setSelected(name); }} />}
     </div>
   );
 }
 
-function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRemoveAccount, onOpenBindings }: {
+function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRemoveAccount, onOpenBindings, customEntry, onRemoveCustomService }: {
+  customEntry: CustomService | null;
+  onRemoveCustomService: (entry: CustomService) => void;
   service: Service;
   accounts: Account[];
   usedBy: (account: Account) => Project[];
@@ -155,7 +166,13 @@ function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRe
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3">
-        <p className="text-[12.5px] leading-[1.6] text-(--muted)">{howReached(tier)}</p>
+        <p className="text-[12.5px] leading-[1.6] text-(--muted)">{howReached(tier, remoteServiceUrl(service.provider) ? service.provider : null, !!customEntry)}</p>
+        {customEntry && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[10px] bg-(--raised) px-3 py-2 text-[12px] text-(--muted)">
+            <span className="nx-mono min-w-0 flex-1 break-all text-(--text)">{customEntry.mcp_url}</span>
+            <Button size="sm" variant="danger-soft" onPress={() => onRemoveCustomService(customEntry)}>Remove service</Button>
+          </div>
+        )}
 
         <div className="mt-4">
           <CardHeading
@@ -175,7 +192,7 @@ function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRe
             </form>
           )}
           {accounts.length === 0 && !linking ? (
-            <p className="rounded-[12px] border border-dashed border-(--line) px-4 py-5 text-center text-[12.5px] text-(--muted)">Link a {service.provider} login once, then bind it to projects under Bindings.</p>
+            <p className="rounded-[12px] border border-dashed border-(--line) px-4 py-5 text-center text-[12.5px] text-(--muted)">Link a {service.provider} account once, then bind it to projects from the Project page.</p>
           ) : (
             <div className="rounded-[12px] border border-(--line)">
               {accounts.map((account, index) => {
@@ -214,8 +231,8 @@ function ServiceDetail({ service, accounts, usedBy, projects, onAddAccount, onRe
       </div>
 
       <div className="flex shrink-0 items-center gap-3 border-t border-(--line-soft) px-5 py-3">
-        <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Next: bind an account and resource per project under Bindings.</span>
-        <Button size="sm" variant="outline" onPress={onOpenBindings}>Open Bindings</Button>
+        <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Next: bind an account and resource per project from the Project page.</span>
+        <Button size="sm" variant="outline" onPress={onOpenBindings}>Open project bindings</Button>
       </div>
     </Card>
   );

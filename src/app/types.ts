@@ -1,4 +1,10 @@
-export type View = "home" | "overview" | "projects" | "agents" | "bindings" | "services" | "guard" | "activity" | "settings";
+/** The four rail destinations, plus Settings (rail footer) and the hidden Guard page. */
+export type View = "home" | "project" | "activity" | "connections" | "settings" | "guard";
+/** Older page names still used by links inside views. `navigate` maps each to a page and section. */
+export type LegacyView = "overview" | "bindings" | "projects" | "services" | "agents";
+export type NavTarget = View | LegacyView;
+export type ProjectTab = "status" | "bindings";
+export type ConnectionsTab = "accounts" | "agents";
 
 /** Backend AgentConfigEdit shape (connect/import/remove return this).
  *  Kept local: no shared types module owns it yet. */
