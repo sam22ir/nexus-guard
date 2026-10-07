@@ -6,44 +6,61 @@ Nexus sits between AI coding agents and the services they use. It works out whic
 project an agent is in and sends each call to that project's own account and resource,
 so an agent working on one project can't reach another project's services. Made for one
 developer running several agents (Claude Code, Codex, OpenCode) across several projects.
-Platform: Linux first.
+Platforms: Linux, macOS and Windows (alpha). Needs Node.js 20.10 or newer.
 
 ## How it works
 
 Agent → Project → Account → Resource
 
 1. The agent asks Nexus for a service. It doesn't choose the project or the keys.
-2. Nexus finds the project, then the account and resource linked to it. If it can't tell,
+2. Nexus finds the project, then the account and resource bound to it. If it can't tell,
    or the project isn't registered, it refuses before any call is made.
 3. Nexus makes the call with that account's login. The agent never sees the key.
 
-Same service in a different project means a different account. Production and
-development are kept apart too.
+Setup in the app has three steps: pick the project folder, connect an agent (one click
+writes the agent's MCP config in the project, with a backup), then unlock Nexus and watch
+the agent's first real call arrive. Nexus starts locked and refuses agent calls until
+it is unlocked.
 
 ## What is covered
 
-- About 50 popular services to start (list still under review).
-- Built-in, reviewed support for Supabase and GitHub. Other services connect through their
-  own MCP server and are protected at the account level, not the resource level, so use
-  one account per project for those.
+- Built in: Supabase (held to one project) and GitHub (held to one repository), signed in
+  through the browser with the user's own account.
+- Through their own sign-in: Neon, PlanetScale, Airtable, GitLab, Vercel, Cloudflare,
+  Netlify, Railway, Sentry, PostHog, Mixpanel, Stripe, PayPal, Resend, Linear, Jira,
+  Notion, Confluence, Figma, Hugging Face, Cloudinary, Webflow, Sanity and Zapier.
+  Vercel and Figma only accept MCP apps they have approved; Nexus is not approved yet.
+  Some of these can be limited to one project, site or base; the rest are kept to the
+  right account only, so use one account per project for those.
+- Any other service with a public MCP address, added by name and address.
+- Read-only by default: Nexus passes only actions a service marks read-only. Safe writes
+  can be allowed per binding, never in production.
 - Each project keeps a secret-free `.nexus/project.json`. Logins stay in the computer's
-  secure storage.
+  keychain.
 - All agents connect to one local Nexus over HTTP. Claude Code and OpenCode report their
-  folder to Nexus. Codex doesn't, so its folder is pinned in config. If an agent reports
-  nothing, Nexus refuses.
-- A live map of agents, projects and service accounts, plus a simple local activity log.
+  folder to Nexus. Codex doesn't, so its folder is pinned in its config. If an agent
+  reports nothing, Nexus refuses.
+- A live map of agents, projects and accounts, plus a local activity log without keys.
 
 ## What it is not
 
 - Not a password manager, a company governance tool, or a file sandbox.
 - It can't see or stop anything an agent does without going through Nexus.
-- Guard (reviewing risky actions) may come later. It is not built.
+- An agent that can run shell commands as the user could edit Nexus's settings files.
+- Guard (approving risky actions one by one) may come later. It is not built.
+
+## Status
+
+Alpha. Claude Code has been run end to end through Nexus; Codex and OpenCode connect the
+same way but haven't had a full real session yet. Linux is tested most; macOS and Windows
+builds are new. Supabase, GitHub and Notion have been signed in and used live.
 
 ## Pricing
 
-Free: up to 2 projects. Pro: about $10–12 a month or $99 a year. Team/Agency: later.
-The core stays free. Prices may change at launch.
+The alpha is free. Later: Free up to 2 projects; Pro about $10–12 a month or $99 a year;
+Team/Agency later. Prices may change.
 
 ## Link
 
 - Website: https://nexus-guard.nafaa-store.workers.dev
+- Source: https://github.com/sam22ir/nexus-guard
