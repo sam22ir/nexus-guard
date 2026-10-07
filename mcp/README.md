@@ -19,6 +19,8 @@ Canonical agent surface (§6) — dotted is canonical, listed:
   Any other `<provider>__*` resolves through the self-added passthrough (approval_required, no provider contact).
 
 Native (`mcp/providers.mjs`): Supabase + GitHub are reviewed operation-by-operation.
+The server reads approvals through the `nexus-keyring` helper (`nexus-keyring <supabase|github> <project-id> <connection-id>`), which looks up the OS-keychain entry `mcp:<provider>:<project-id>:<connection-id>` and prints its JSON (`accessToken` or `token`). The desktop app writes the Supabase entry after browser approval. It does not write a GitHub entry yet, so a GitHub binding stays unconnected until it does.
+
 GitHub read-only allowlist: `search_*`, `get_*`, `list_*` repo/issue/PR/workflow reads; writes
 (`create_*`, `update_*`, deletes) blocked by deterministic policy. GitHub upstream URL is
 `NEXUS_GITHUB_MCP_URL` (default `https://api.githubcopilot.com/mcp` — verify against your
