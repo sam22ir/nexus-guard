@@ -2867,6 +2867,125 @@ fn set_binding_scope(project_id: String, connection_id: String, value: Option<St
     set_scope_at(&binding_scopes_path(), &key, value.as_deref())
 }
 
+// ---- Services the user adds themselves (a name and an MCP address) ----
+// Stored in the app's own config folder, like the write switch and limits, so an
+// agent cannot add a service. The Nexus server reads the same file
+// (mcp/providers.mjs).
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct CustomService {
+    name: String,
+    #[serde(rename = "mcpUrl")]
+    mcp_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomServiceEntry {
+    slug: String,
+    name: String,
+    mcp_url: String,
+}
+
+fn custom_services_path() -> PathBuf {
+    if let Ok(explicit) = env::var("NEXUS_CUSTOM_SERVICES_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_default();
+    PathBuf::from(home).join(".config/nexus-guard/custom-services.json")
+}
+
+fn read_custom_services(path: &std::path::Path) -> std::collections::BTreeMap<String, CustomService> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("services").cloned())
+        .and_then(|services| serde_json::from_value(services).ok())
+        .unwrap_or_default()
+}
+
+/// Names the app already knows: the built-in service list plus the two native services.
+fn built_in_service_keys() -> Vec<String> {
+    let mut keys = vec!["supabase".to_string(), "github".to_string()];
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(include_str!("../../mcp/services.json")) {
+        keys.extend(map.keys().filter(|key| !key.starts_with('_')).cloned());
+    }
+    keys
+}
+
+/// A custom service name is one word of letters, digits and hyphens, so its
+/// lowercase form is also its keychain and manifest key.
+fn custom_service_slug(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let ok = (2..=40).contains(&name.len())
+        && name.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !ok {
+        return Err("Use 2 to 40 letters, numbers or hyphens for the name, with no spaces (for example Acme or my-crm).".to_string());
+    }
+    Ok(name.to_ascii_lowercase())
+}
+
+fn add_custom_service_at(path: &std::path::Path, name: &str, mcp_url: &str) -> Result<CustomServiceEntry, String> {
+    let slug = custom_service_slug(name)?;
+    if built_in_service_keys().contains(&slug) {
+        return Err(format!("{} is already in Nexus. Pick it from the list instead.", name.trim()));
+    }
+    let url = mcp_oauth::check_service_url(mcp_url)?.to_string();
+    if url.len() > 300 {
+        return Err("That address is too long.".to_string());
+    }
+    let mut services = read_custom_services(path);
+    if services.contains_key(&slug) {
+        return Err(format!("You already added a service called {}. Remove it first to change its address.", name.trim()));
+    }
+    services.insert(slug.clone(), CustomService { name: name.trim().to_string(), mcp_url: url.clone() });
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "Nexus could not save this service.".to_string())?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "services": services })).map_err(|_| "Nexus could not save this service.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this service.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this service.".to_string())?;
+    Ok(CustomServiceEntry { slug, name: name.trim().to_string(), mcp_url: url })
+}
+
+fn remove_custom_service_at(path: &std::path::Path, slug: &str) -> Result<(), String> {
+    let mut services = read_custom_services(path);
+    if services.remove(slug).is_none() {
+        return Ok(());
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec(&serde_json::json!({ "services": services })).map_err(|_| "Nexus could not save this change.".to_string())?;
+    fs::write(&temporary, payload).map_err(|_| "Nexus could not save this change.".to_string())?;
+    fs::rename(&temporary, path).map_err(|_| "Nexus could not save this change.".to_string())
+}
+
+#[tauri::command]
+fn list_custom_services() -> Vec<CustomServiceEntry> {
+    read_custom_services(&custom_services_path())
+        .into_iter()
+        .map(|(slug, service)| CustomServiceEntry { slug, name: service.name, mcp_url: service.mcp_url })
+        .collect()
+}
+
+#[tauri::command]
+fn add_custom_service(name: String, mcp_url: String) -> Result<CustomServiceEntry, String> {
+    add_custom_service_at(&custom_services_path(), &name, &mcp_url)
+}
+
+#[tauri::command]
+fn remove_custom_service(slug: String) -> Result<(), String> {
+    custom_service_slug(&slug)?;
+    remove_custom_service_at(&custom_services_path(), &slug)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2930,7 +3049,10 @@ pub fn run() {
             get_write_grant,
             set_write_grant,
             get_binding_scope,
-            set_binding_scope
+            set_binding_scope,
+            list_custom_services,
+            add_custom_service,
+            remove_custom_service
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Guard");
@@ -2975,6 +3097,37 @@ mod agent_setup_tests {
         assert!(set_scope_at(&path, "k:c", Some(&"x".repeat(201))).is_err());
         fs::write(&path, "garbage").unwrap();
         assert!(read_scopes(&path).is_empty(), "a damaged file means no limit");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_services_are_validated_saved_and_removed() {
+        let dir = std::env::temp_dir().join(format!("nexus-custom-test-{}", std::process::id()));
+        let path = dir.join("custom-services.json");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(read_custom_services(&path).is_empty());
+        let added = add_custom_service_at(&path, "Acme", "https://mcp.acme.io/mcp").unwrap();
+        assert_eq!((added.slug.as_str(), added.name.as_str()), ("acme", "Acme"));
+        assert_eq!(read_custom_services(&path).get("acme").map(|s| s.mcp_url.as_str()), Some("https://mcp.acme.io/mcp"));
+        // The same name twice, and built-in names, are refused.
+        assert!(add_custom_service_at(&path, "acme", "https://other.acme.io/mcp").is_err());
+        for taken in ["Linear", "Supabase", "GitHub", "notion"] {
+            assert!(add_custom_service_at(&path, taken, "https://mcp.example.com/mcp").is_err(), "{taken}");
+        }
+        // Names that could not be a keychain or manifest key are refused.
+        for bad in ["", "a", "my crm", "acme:x", "-acme", "ac/me", "über", &"x".repeat(41)] {
+            assert!(add_custom_service_at(&path, bad, "https://mcp.example.com/mcp").is_err(), "{bad:?}");
+        }
+        // Unsafe addresses are refused.
+        for bad in ["http://mcp.example.com", "https://127.0.0.1/mcp", "https://localhost/mcp", "https://user:pw@mcp.example.com"] {
+            assert!(add_custom_service_at(&path, "Other", bad).is_err(), "{bad}");
+        }
+        assert_eq!(read_custom_services(&path).len(), 1);
+        remove_custom_service_at(&path, "acme").unwrap();
+        assert!(read_custom_services(&path).is_empty());
+        remove_custom_service_at(&path, "acme").unwrap();
+        fs::write(&path, "garbage").unwrap();
+        assert!(read_custom_services(&path).is_empty(), "a damaged file means no custom services");
         let _ = fs::remove_dir_all(&dir);
     }
 

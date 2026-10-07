@@ -10,6 +10,9 @@
 // to match UI vocabulary; enforcement stays fail-closed (approval_required) for
 // both curated and self-added. Do NOT delete enforcement.
 
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import services from "./services.json" with { type: "json" };
 
 export const PROVIDER_TIERS = Object.freeze(["native", "curated", "self-added"]);
@@ -143,10 +146,49 @@ export function serviceScopeSpec(provider) {
   return { label: typeof scope.label === "string" && scope.label ? scope.label : "resource", args: scope.args.filter((a) => typeof a === "string" && a) };
 }
 
-/** The remote MCP address Nexus signs in to for this service, or null when it has none. */
+/**
+ * An address Nexus will send a sign-in to: https, normal port, a public-looking
+ * hostname, nothing smuggled in the URL. The desktop app applies the same rules
+ * when a service is added; the server checks again because it is what sends the token.
+ */
+export function isSafeServiceUrl(raw) {
+  let url;
+  try { url = new URL(String(raw).trim()); } catch { return false; }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+  if (url.port && url.port !== "443") return false;
+  const host = url.hostname.toLowerCase();
+  if (!host || host.startsWith("[") || /^[0-9.]+$/.test(host)) return false;
+  if (host === "localhost" || !host.includes(".")) return false;
+  return ![".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet"].some((suffix) => host.endsWith(suffix));
+}
+
+export function customServicesPath(env = process.env) {
+  if (typeof env.NEXUS_CUSTOM_SERVICES_FILE === "string" && env.NEXUS_CUSTOM_SERVICES_FILE.trim()) {
+    return path.resolve(env.NEXUS_CUSTOM_SERVICES_FILE.trim());
+  }
+  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
+  return path.join(home, ".config", "nexus-guard", "custom-services.json");
+}
+
+/** Services the user added in the app (name + address), read from the app's own config folder. Never from a project folder. */
+function customServices(filePath = customServicesPath()) {
+  try {
+    const found = JSON.parse(fsSync.readFileSync(filePath, "utf8"))?.services;
+    return found && typeof found === "object" && !Array.isArray(found) ? found : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The remote MCP address Nexus signs in to for this service (built in, or added by the user), or null. */
 export function serviceMcpUrl(provider) {
-  const entry = services[normalizeProvider(provider)];
-  return entry && typeof entry === "object" && typeof entry.mcpUrl === "string" ? entry.mcpUrl : null;
+  const key = normalizeProvider(provider);
+  const entry = services[key];
+  if (entry && typeof entry === "object" && typeof entry.mcpUrl === "string") return entry.mcpUrl;
+  // A built-in name can never be redefined by a custom entry.
+  if (key === "supabase" || key === "github" || key.startsWith("_")) return null;
+  const custom = customServices()[key];
+  return custom && typeof custom === "object" && isSafeServiceUrl(custom.mcpUrl) ? String(custom.mcpUrl).trim() : null;
 }
 
 /**

@@ -364,3 +364,64 @@ test("service list: scope rows are well formed, and unknown services have none",
   assert.equal(serviceScopeSpec("notion"), null);
   assert.equal(serviceScopeSpec("nothing-here"), null);
 });
+
+// ---- Services the user adds themselves ----
+
+import { isSafeServiceUrl } from "./providers.mjs";
+
+test("custom services: only public https addresses are ever used", () => {
+  for (const ok of ["https://mcp.acme.io/mcp", "https://mcp.acme.io", "https://a.b.example.co.uk/x?y=1", "https://mcp.acme.io:443/mcp"]) assert.equal(isSafeServiceUrl(ok), true, ok);
+  for (const bad of ["http://mcp.acme.io", "mcp.acme.io", "", "https://localhost/mcp", "https://127.0.0.1/mcp", "https://[::1]/mcp", "https://10.0.0.1", "https://intranet/mcp", "https://printer.local", "https://x.internal", "https://u:p@mcp.acme.io", "https://mcp.acme.io/#x", "https://mcp.acme.io:8443/mcp", null, undefined, 5]) {
+    assert.equal(isSafeServiceUrl(bad), false, String(bad));
+  }
+});
+
+async function withCustomFile(t, services) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-custom-"));
+  const file = path.join(dir, "custom-services.json");
+  await fs.writeFile(file, typeof services === "string" ? services : JSON.stringify({ services }));
+  const previous = process.env.NEXUS_CUSTOM_SERVICES_FILE;
+  process.env.NEXUS_CUSTOM_SERVICES_FILE = file;
+  t.after(async () => { if (previous === undefined) delete process.env.NEXUS_CUSTOM_SERVICES_FILE; else process.env.NEXUS_CUSTOM_SERVICES_FILE = previous; await fs.rm(dir, { recursive: true, force: true }); });
+}
+
+test("custom services: an added service is signed in to and held to the read-only rule", async (t) => {
+  await withCustomFile(t, { acme: { name: "Acme", mcpUrl: "https://mcp.acme.io/mcp" } });
+  assert.equal(serviceMcpUrl("Acme"), "https://mcp.acme.io/mcp");
+  const dir = await fixture(t, { acme: { ...connection, target: "Acme", resource: "Acme", connection_id: "koupa-acme" } });
+  const log = [];
+  const client = await session(t, dir, log);
+  assert.notEqual((await exec(client, "acme", "list_issues", {})).isError, true);
+  assert.equal(log.find((i) => i.kind === "connect").url, "https://mcp.acme.io/mcp");
+  assert.equal((await exec(client, "acme", "create_issue")).isError, true);
+  assert.equal(log.filter((i) => i.kind === "call").length, 1, "only the read-only tool was sent");
+});
+
+test("custom services: unsafe or damaged entries are ignored, so the service stays fail-closed", async (t) => {
+  await withCustomFile(t, { evil: { name: "Evil", mcpUrl: "http://127.0.0.1:9/mcp" }, internal: { name: "Internal", mcpUrl: "https://intranet/mcp" }, odd: "not an object" });
+  for (const name of ["evil", "internal", "odd", "missing"]) assert.equal(serviceMcpUrl(name), null, name);
+  await withCustomFile(t, "garbage");
+  assert.equal(serviceMcpUrl("evil"), null);
+});
+
+test("custom services: a custom entry can never redefine a built-in or native service", async (t) => {
+  await withCustomFile(t, {
+    linear: { name: "Linear", mcpUrl: "https://attacker.example.com/mcp" },
+    supabase: { name: "Supabase", mcpUrl: "https://attacker.example.com/mcp" },
+    github: { name: "GitHub", mcpUrl: "https://attacker.example.com/mcp" },
+  });
+  assert.equal(serviceMcpUrl("linear"), "https://mcp.linear.app/mcp");
+  assert.equal(serviceMcpUrl("supabase"), null);
+  assert.equal(serviceMcpUrl("github"), null);
+});
+
+test("custom services: the project folder cannot add a service", async (t) => {
+  await withCustomFile(t, {});
+  const dir = await fixture(t, { acme: { ...connection, target: "Acme", resource: "Acme" } });
+  await fs.writeFile(path.join(dir, ".nexus", "custom-services.json"), JSON.stringify({ services: { acme: { name: "Acme", mcpUrl: "https://mcp.acme.io/mcp" } } }));
+  const log = [];
+  const client = await session(t, dir, log);
+  const res = await exec(client, "acme", "list_issues");
+  assert.equal(res.isError, true);
+  assert.equal(log.length, 0, "no token read, no connection");
+});

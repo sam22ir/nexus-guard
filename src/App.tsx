@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
-import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
+import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, setCustomServices, type CustomService, saveAccounts, saveProjects, starterAccounts, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
 import { type PendingLinkRequest } from "./topology";
@@ -478,6 +478,35 @@ function App() {
       }
     }
     throw new Error("The browser approval timed out. Start again and approve within a few minutes.");
+  }
+
+  // ---- Services the user added themselves (a name and an MCP address) ----
+  const [customServices, setCustomServiceState] = useState<CustomService[]>([]);
+  async function refreshCustomServices() {
+    if (!desktopAvailable()) return;
+    const list = await invoke<CustomService[]>("list_custom_services").catch(() => [] as CustomService[]);
+    setCustomServices(list);
+    setCustomServiceState(list);
+  }
+  useEffect(() => { void refreshCustomServices(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function addCustomService(name: string, mcpUrl: string): Promise<void> {
+    if (!desktopAvailable()) throw new Error("Open the desktop app to add a service.");
+    try {
+      await invoke("add_custom_service", { name, mcpUrl });
+    } catch (error) {
+      throw new Error(githubText(error, "Could not add this service. Check the name and address, then try again."));
+    }
+    await refreshCustomServices();
+    setNotice(`${name} added. Link an account and add a binding to sign in to it.`);
+  }
+
+  async function removeCustomService(entry: CustomService) {
+    const using = projects.filter((item) => item.connections.some((c) => c.provider.toLowerCase() === entry.slug));
+    if (!window.confirm(`Remove ${entry.name} from Nexus?${using.length ? `\n\nIt is bound in ${using.map((item) => item.name).join(", ")}. Those bindings will stop working until you add the service again.` : ""}`)) return;
+    await invoke("remove_custom_service", { slug: entry.slug }).catch(() => undefined);
+    await refreshCustomServices();
+    setNotice(`${entry.name} removed.`);
   }
 
   // ---- Any other service on the launch list: sign in with its own remote MCP server ----
@@ -958,7 +987,7 @@ function App() {
       {view === "connections" && (
         <ConnectionsPage tab={connectionsTab} onTab={setConnectionsTab}>
           {connectionsTab === "accounts"
-            ? <ServicesView projects={projects} accounts={accounts} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => navigate("bindings")} />
+            ? <ServicesView projects={projects} accounts={accounts} customServices={customServices} onAddCustomService={addCustomService} onRemoveCustomService={(entry) => void removeCustomService(entry)} onAddAccount={addAccount} onRemoveAccount={(id) => void removeAccount(id)} onOpenBindings={() => navigate("bindings")} />
             : <AgentsView projects={projects} onConnect={(projectId, agentId) => openConnectAgent(projectId, agentId)} />}
         </ConnectionsPage>
       )}
@@ -995,7 +1024,7 @@ function App() {
       {modal === "project" && <AddProjectModal onClose={() => setModal(null)} onSave={addProject} existingNames={projects.map((item) => item.name)} />}
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
-      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} remote={{ available: desktopAvailable(), connect: connectRemoteService }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
+      {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} customNames={customServices.map((entry) => entry.name)} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} remote={{ available: desktopAvailable(), connect: connectRemoteService }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
       {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );

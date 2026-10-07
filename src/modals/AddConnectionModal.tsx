@@ -19,7 +19,7 @@ function defaultsFor(provider: string): { detail: string; tone: Connection["tone
 
 /** Bind one account and resource to a project. Supabase defaults to browser
  *  approval then a project pick; every other service is a short manual form. */
-export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, remote, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
+export function AddConnectionModal({ initialProvider, initialAccountId, projectId, projectName, environment, projects, accounts, onClose, onSave, onCreateAccount, github, remote, customNames, onAuthorizeMcp, onConfirmMcp, onCancelMcp, onAbortMcp }: {
   projectId: string;
   projectName: string;
   environment?: string;
@@ -33,6 +33,8 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   onCreateAccount: (input: { provider: string; label: string }) => string;
   /** Connect the user's own GitHub account (device flow). */
   github: GithubApi;
+  /** Services the user added themselves. */
+  customNames: string[];
   /** Sign in to any other service on the launch list. */
   remote: RemoteServiceApi;
   onAuthorizeMcp: (detail: string, accountId?: string) => Promise<{ connectionId: string; projects: PickedProject[]; listError?: string }>;
@@ -92,7 +94,7 @@ export function AddConnectionModal({ initialProvider, initialAccountId, projectI
   const picking = method === "mcp" && mcpPhase === "pick";
   // Browser approval proves which Supabase account this is, so there is nothing to choose up front.
   const accountFromApproval = (isSupabase || githubBrowser) && method === "mcp";
-  const services = Array.from(new Set([...PROVIDER_CATALOG.map((p) => p.provider), ...accounts.map((a) => a.provider), "Other"]));
+  const services = Array.from(new Set([...PROVIDER_CATALOG.map((p) => p.provider), ...customNames, ...accounts.map((a) => a.provider), "Other"]));
 
   function changeProvider(next: string) {
     setProvider(next);

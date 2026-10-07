@@ -159,9 +159,18 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
 /** Services Nexus can sign in to with one generic flow (mcp/services.json):
  *  the service's own remote MCP address, or null. Supabase and GitHub have their own flows. */
 export function remoteServiceUrl(provider: string): string | null {
-  const entry = (services as Record<string, { mcpUrl?: string } | string>)[provider.trim().toLowerCase()];
-  return entry && typeof entry === "object" && typeof entry.mcpUrl === "string" ? entry.mcpUrl : null;
+  const key = provider.trim().toLowerCase();
+  const entry = (services as Record<string, { mcpUrl?: string } | string>)[key];
+  if (entry && typeof entry === "object" && typeof entry.mcpUrl === "string") return entry.mcpUrl;
+  return customServices.find((service) => service.slug === key)?.mcp_url ?? null;
 }
+
+/** A service the user added themselves: a name and the address of its MCP server. */
+export type CustomService = { slug: string; name: string; mcp_url: string };
+
+// Kept in the app's own config folder (the desktop app loads it); this is the in-memory copy.
+let customServices: CustomService[] = [];
+export function setCustomServices(list: CustomService[]) { customServices = list; }
 
 /** How this service names the one resource a binding can be limited to, or null (whole account only). */
 export function remoteServiceScope(provider: string): { label: string; verified: boolean } | null {

@@ -72,6 +72,31 @@ impl Tokens {
 
 // ---------- pure parsing (unit tested) ----------
 
+/// A service address Nexus is willing to send a sign-in to: https on the normal
+/// port, a real public-looking hostname, and nothing smuggled in the URL.
+/// Applies to every service, built in or typed by the user.
+pub fn check_service_url(raw: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(raw.trim()).map_err(|_| "That address is not valid. Use the full https address of the service's MCP server.".to_string())?;
+    if url.scheme() != "https" {
+        return Err("Nexus only signs in to services over https.".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return Err("The address cannot contain a username, password or fragment.".to_string());
+    }
+    if url.port().is_some_and(|port| port != 443) {
+        return Err("Use the normal https port (443).".to_string());
+    }
+    let host = match url.host() {
+        Some(url::Host::Domain(domain)) => domain.to_ascii_lowercase(),
+        _ => return Err("Use a service name such as mcp.example.com, not an IP address.".to_string()),
+    };
+    let internal = host == "localhost" || !host.contains('.') || [".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet"].iter().any(|suffix| host.ends_with(suffix));
+    if internal {
+        return Err("That looks like an address on your own network. Nexus only signs in to public services.".to_string());
+    }
+    Ok(url)
+}
+
 /// The `resource_metadata="…"` address from a `WWW-Authenticate` challenge.
 pub fn extract_resource_metadata(www_authenticate: &str) -> Option<String> {
     let start = www_authenticate.find("resource_metadata=\"")? + "resource_metadata=\"".len();
@@ -203,10 +228,7 @@ fn get_json(url: &str) -> Option<Value> {
 
 /// Ask the server what sign-in it wants and where.
 pub fn discover(server_url: &str) -> Result<Discovery, String> {
-    let url = url::Url::parse(server_url).map_err(|_| "That service address is not valid.".to_string())?;
-    if url.scheme() != "https" {
-        return Err("Nexus only signs in to services over https.".to_string());
-    }
+    let url = check_service_url(server_url)?;
     let origin = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
     let origin = match url.port() {
         Some(port) => format!("{origin}:{port}"),
@@ -338,6 +360,21 @@ mod tests {
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn only_public_https_service_addresses_are_accepted() {
+        for ok in ["https://mcp.example.com/mcp", "https://mcp.example.com", "https://a.b.example.co.uk/x/y?z=1", "https://mcp.example.com:443/mcp", " https://mcp.example.com/mcp "] {
+            assert!(check_service_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://mcp.example.com/mcp", "ftp://mcp.example.com", "mcp.example.com", "", "https://",
+            "https://localhost/mcp", "https://127.0.0.1/mcp", "https://[::1]/mcp", "https://192.168.1.5/mcp", "https://10.0.0.1",
+            "https://intranet/mcp", "https://printer.local/mcp", "https://db.internal/mcp", "https://x.lan", "https://x.localhost",
+            "https://user:pw@mcp.example.com/mcp", "https://user@mcp.example.com", "https://mcp.example.com/mcp#frag", "https://mcp.example.com:8443/mcp",
+        ] {
+            assert!(check_service_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
