@@ -44,13 +44,16 @@ const call = (client) => client.callTool({ name: "nexus.context", arguments: {} 
 const auditExists = (dir) => fs.access(path.join(dir, ".nexus", "audit.log")).then(() => true, () => false);
 
 test("pickWorkspaceFromRoots: exactly one absolute file root, nothing else", () => {
-  assert.deepEqual(pickWorkspaceFromRoots([{ uri: "file:///tmp/a" }]), { ok: true, workspace: "/tmp/a" });
-  assert.deepEqual(pickWorkspaceFromRoots([{ uri: "file:///tmp/a" }, { uri: "file:///tmp/a/" }]), { ok: true, workspace: "/tmp/a" });
+  // Absolute on this system: /tmp/a here, C:\tmp\a on Windows.
+  const a = path.resolve("/tmp/a");
+  const uriA = pathToFileURL(a).href;
+  assert.deepEqual(pickWorkspaceFromRoots([{ uri: uriA }]), { ok: true, workspace: a });
+  assert.deepEqual(pickWorkspaceFromRoots([{ uri: uriA }, { uri: `${uriA}/` }]), { ok: true, workspace: a });
   assert.equal(pickWorkspaceFromRoots([]).ok, false);
   assert.equal(pickWorkspaceFromRoots(undefined).ok, false);
   assert.equal(pickWorkspaceFromRoots([{ uri: "https://example.com/x" }, { uri: "ssh://h/p" }]).ok, false);
-  assert.equal(pickWorkspaceFromRoots([{ uri: "file://remote-host/tmp/a" }]).ok, false);
-  assert.equal(pickWorkspaceFromRoots([{ uri: "file:///tmp/a" }, { uri: "file:///tmp/b" }]).ok, false);
+  assert.equal(pickWorkspaceFromRoots([{ uri: "file://remote-host/tmp/a" }]).ok, false, "another machine's folder");
+  assert.equal(pickWorkspaceFromRoots([{ uri: uriA }, { uri: pathToFileURL(path.resolve("/tmp/b")).href }]).ok, false);
   assert.equal(pickWorkspaceFromRoots([{ uri: 42 }, null]).ok, false);
 });
 
