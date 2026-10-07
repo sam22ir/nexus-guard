@@ -60,6 +60,8 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
   // Only the optional "simulated check" in the last step counts as a stand-in for the agent's first call.
   const [checks, setChecks] = useState<AgentTestStep[]>([]);
   const [testing, setTesting] = useState(false);
+  // Offered after a wait, or on request, so it is not a shortcut around trying the agent.
+  const [trouble, setTrouble] = useState(false);
   const [testError, setTestError] = useState("");
   const [baseline, setBaseline] = useState<string | null>(null);
   const [liveCall, setLiveCall] = useState<AuditEntry | null>(null);
@@ -75,7 +77,8 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
   const nameUsed = !registeredId && projects.some((p) => p.name.toLowerCase() === name.trim().toLowerCase());
   const canRegister = name.trim().length > 0 && path.trim().length > 0 && !nameUsed;
   const simulated = checks.length > 0 && ["Project file", "HTTP reachable", "Session"].every((s) => checks.find((c) => c.step === s)?.ok);
-  const proven = !!liveCall || simulated;
+  // Only the agent's real first call proves it works. The setup check only shows Nexus's own side is fine.
+  const proven = !!liveCall;
   const agent = agents.find((a) => a.id === agentId) ?? null;
   const agentFile = agentId ? AGENT_FILES[agentId] ?? "its MCP config" : "its MCP config";
   const connected = !!written;
@@ -148,6 +151,12 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
     }, 2000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [step, project, desktop]);
+
+  useEffect(() => {
+    if (step !== 2 || liveCall) return;
+    const timer = window.setTimeout(() => setTrouble(true), 45_000);
+    return () => window.clearTimeout(timer);
+  }, [step, liveCall]);
 
   function changePath(value: string) {
     setPath(value);
@@ -384,14 +393,25 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                       : <>Without Nexus, an agent in {project?.name} could reach any resource your account allows. Here only what you bind to this project is reachable.</>}
                   </div>
                 )}
-                {!liveCall && (
+                {!liveCall && !trouble && (
+                  <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => setTrouble(true)}>Having trouble?</button>
+                )}
+                {!liveCall && trouble && (
                   <div className="flex flex-col gap-2 border-t border-(--line-soft) pt-3">
+                    <strong className="text-[13px] font-semibold text-(--text)">Not seeing the call?</strong>
+                    <ul className="list-disc pl-5 text-[12px] leading-[1.6] text-(--muted)">
+                      <li>Start {agent?.name ?? "your agent"} again, in exactly <span className="nx-mono">{project?.path ?? "your project folder"}</span>.</li>
+                      {agentId === "claude" && <li>If Claude Code asks whether to trust the “nexus” server, choose yes.</li>}
+                      {desktop && <li>Nexus must be unlocked{locked ? ": unlock it above" : " (it is)"}.</li>}
+                      <li>Send the message above and let the agent answer.</li>
+                    </ul>
                     <div className="flex flex-wrap items-center gap-3">
-                      <Button size="sm" variant="outline" isDisabled={testing || !project} onPress={() => void runTest()}>{testing ? "Checking…" : checks.length ? "Run the check again" : "Run a simulated check"}</Button>
-                      <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Not working yet? This checks the setup without involving your agent.</span>
+                      <Button size="sm" variant="outline" isDisabled={testing || !project} onPress={() => void runTest()}>{testing ? "Checking…" : checks.length ? "Check the setup again" : "Check the setup"}</Button>
+                      <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Checks Nexus&apos;s side only. It cannot tell whether your agent connected.</span>
                     </div>
                     {testError && <p className="text-[12px] text-(--red)" role="alert">{testError}</p>}
                     {checks.length > 0 && checkList(checks)}
+                    {simulated && <p className="rounded-[10px] bg-(--raised) px-3 py-2 text-[12px] leading-[1.55] text-(--muted)" role="status">Nexus&apos;s side looks fine, but your agent has not called yet. This page updates by itself when it does.</p>}
                   </div>
                 )}
                 {proven && (
@@ -417,7 +437,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
             {step === 0 ? <span className="min-w-0 flex-1 text-[11.5px] text-(--muted)">{!registeredId && !canRegister ? "Choose a folder and a name to continue." : ""}</span> : <Button size="sm" variant="ghost" onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>}
             {step === 0 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
             {step === 1 && <Button size="sm" variant={connected ? "primary" : "outline"} onPress={() => setStep(2)}>{connected ? "Continue" : "Skip this step"}</Button>}
-            {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish without testing"}</Button>}
+            {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish without an agent call"}</Button>}
           </div>
         </section>
 
