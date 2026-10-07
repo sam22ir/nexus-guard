@@ -1,8 +1,8 @@
 // Shared, secret-free lock state for the local Nexus HTTP bridge and Tauri app.
 // A missing or damaged state file is treated as locked when enforcement is on.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { nexusConfigDir } from "./config-dir.mjs";
 
 export function vaultStatePath(env = process.env) {
   if (typeof env.NEXUS_VAULT_STATE_FILE === "string" && env.NEXUS_VAULT_STATE_FILE.trim()) {
@@ -11,8 +11,7 @@ export function vaultStatePath(env = process.env) {
   if (typeof env.XDG_RUNTIME_DIR === "string" && env.XDG_RUNTIME_DIR.trim()) {
     return path.join(env.XDG_RUNTIME_DIR, "nexus-guard-vault-state.json");
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
-  return path.join(home, ".config", "nexus-guard", "vault-state.json");
+  return path.join(nexusConfigDir(env), "vault-state.json");
 }
 
 export async function readVaultState(filePath = vaultStatePath()) {

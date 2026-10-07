@@ -3,15 +3,14 @@
 // project folder, so an agent cannot widen its own reach by editing files.
 // No entry means the binding covers the whole signed-in account.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { nexusConfigDir } from "./config-dir.mjs";
 
 export function bindingScopesPath(env = process.env) {
   if (typeof env.NEXUS_BINDING_SCOPES_FILE === "string" && env.NEXUS_BINDING_SCOPES_FILE.trim()) {
     return path.resolve(env.NEXUS_BINDING_SCOPES_FILE.trim());
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
-  return path.join(home, ".config", "nexus-guard", "binding-scopes.json");
+  return path.join(nexusConfigDir(env), "binding-scopes.json");
 }
 
 /** The value this exact binding is limited to, or null (whole account). */

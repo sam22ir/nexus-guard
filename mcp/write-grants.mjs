@@ -2,15 +2,14 @@
 // own config folder, never in the project folder: an agent can edit the files
 // in its workspace but must not be able to grant itself write access.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { nexusConfigDir } from "./config-dir.mjs";
 
 export function writeGrantsPath(env = process.env) {
   if (typeof env.NEXUS_WRITE_GRANTS_FILE === "string" && env.NEXUS_WRITE_GRANTS_FILE.trim()) {
     return path.resolve(env.NEXUS_WRITE_GRANTS_FILE.trim());
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
-  return path.join(home, ".config", "nexus-guard", "write-grants.json");
+  return path.join(nexusConfigDir(env), "write-grants.json");
 }
 
 const keyFor = (projectId, connectionId) => `${projectId}:${connectionId}`;

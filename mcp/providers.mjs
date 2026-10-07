@@ -11,8 +11,8 @@
 // both curated and self-added. Do NOT delete enforcement.
 
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { nexusConfigDir } from "./config-dir.mjs";
 import services from "./services.json" with { type: "json" };
 
 export const PROVIDER_TIERS = Object.freeze(["native", "curated", "self-added"]);
@@ -166,8 +166,7 @@ export function customServicesPath(env = process.env) {
   if (typeof env.NEXUS_CUSTOM_SERVICES_FILE === "string" && env.NEXUS_CUSTOM_SERVICES_FILE.trim()) {
     return path.resolve(env.NEXUS_CUSTOM_SERVICES_FILE.trim());
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME : os.homedir();
-  return path.join(home, ".config", "nexus-guard", "custom-services.json");
+  return path.join(nexusConfigDir(env), "custom-services.json");
 }
 
 /** Services the user added in the app (name + address), read from the app's own config folder. Never from a project folder. */

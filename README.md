@@ -16,7 +16,13 @@ unmanaged, not protected — direct provider CLI/MCP/browser use bypasses Nexus.
 
 You need **Node.js 20 or newer** and one coding agent (Claude Code, Codex or OpenCode). The desktop app runs a small local server with your Node, and shows a "Get Node.js" prompt if it is missing or too old.
 
-**Installer:** download the build for your system from the project's GitHub Releases (unsigned for now, so your OS may ask you to confirm opening it).
+**Installer:** download the build for your system from the project's GitHub Releases. Builds are unsigned for now, so your OS will ask you to confirm opening it:
+
+- **macOS:** the first time, right-click the app and choose Open (or allow it in System Settings → Privacy & Security).
+- **Windows:** SmartScreen may say it protected your PC; choose More info, then Run anyway.
+- **Linux:** use the `.deb`, or make the `.AppImage` executable and run it.
+
+Settings live in `~/.config/nexus-guard` (Linux), `~/Library/Application Support/nexus-guard` (macOS) or `%APPDATA%\nexus-guard` (Windows).
 
 **From source:** also install Rust (via [rustup](https://rustup.rs)) and the [Tauri desktop libraries](https://tauri.app/start/prerequisites/) for your OS, then:
 
@@ -91,7 +97,7 @@ The app shows saved project/service names, but never displays the key values. Th
 
 The browser preview (`npm run dev`) does not unlock the keychain or accept keys. This is an early approval store, not a finished credential broker. Nexus cannot yet verify which Supabase project owns a key, connect a coding agent, or protect commands run outside Nexus.
 
-The Linux desktop app has now built and opened successfully on Linux Mint 22. `npm run build` checks the web interface only; `npm run tauri dev` opens the desktop app.
+The Linux desktop app has built and opened successfully on Linux Mint 22. macOS and Windows have platform code paths (settings folder, keychain, finding Node and agents) and a CI workflow (`.github/workflows/ci.yml`) runs the same tests on them, but neither app has been opened and used by a person yet. `npm run build` checks the web interface only; `npm run tauri dev` opens the desktop app.
 
 ## Codex bridge (early)
 
