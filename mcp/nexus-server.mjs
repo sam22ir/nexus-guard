@@ -8,6 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema, ListRootsResultSchema, RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { fileURLToPath } from "node:url";
+import { isEntryFile } from "./entry.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { classify, decideGuard, resolveOverride } from "./guard-policy.mjs";
@@ -669,6 +670,9 @@ export function pickWorkspaceFromRoots(roots) {
     if (!uri.startsWith("file://")) continue;
     let dir;
     try {
+      // A root on another machine (file://host/…, a network share on Windows) is never a local project.
+      const host = new URL(uri).hostname;
+      if (host && host !== "localhost") continue;
       dir = fileURLToPath(uri);
     } catch {
       continue;
@@ -1207,7 +1211,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
   return server;
 }
 
-if (!globalThis.__NEXUS_BUNDLED && process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (!globalThis.__NEXUS_BUNDLED && isEntryFile(import.meta.url)) {
   if (!stdioGateAllows()) {
     console.error("Nexus stdio entrypoint is deprecated and disabled by default. Use the persistent HTTP instance (http://localhost:3939/mcp) or set NEXUS_ALLOW_STDIO=1 to allow stdio for one release.");
     process.exit(1);

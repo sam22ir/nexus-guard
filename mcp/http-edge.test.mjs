@@ -132,7 +132,8 @@ test("workspace precedence: header > query > default", async (t) => {
   assert.equal(def.status, 200);
   const defBody = await def.json();
   assert.equal(defBody.project, "EdgeDef");
-  assert.equal(defBody.workspace, path.resolve(dirDef));
+  // The server reports the real folder (macOS: /private/var/…, Windows: no 8.3 short names).
+  assert.equal(defBody.workspace, await fs.realpath(dirDef));
 });
 
 // 2. Overlong workspace (>1024) falls back to default, no crash.
@@ -148,7 +149,7 @@ test("overlong workspace falls back to default without crash", async (t) => {
   const res = await fetch(`${base}/context?workspace=${encodeURIComponent(long)}`);
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.equal(body.workspace, path.resolve(dirDef));
+  assert.equal(body.workspace, await fs.realpath(dirDef));
   assert.equal(body.project, "EdgeDef");
   const h = await fetch(`${base}/healthz`);
   assert.equal(h.status, 200);

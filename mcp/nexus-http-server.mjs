@@ -21,7 +21,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { isEntryFile } from "./entry.mjs";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { readContext, makeNexusServer, createSessionStore } from "./nexus-server.mjs";
 import { readVaultState, vaultStatePath } from "./vault-state.mjs";
@@ -31,7 +31,10 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // Phase 2: single persistent HTTP instance defaults (paper: http://localhost:<port>/mcp).
 // Unified localhost default + NEXUS_HTTP_PORT 3939. NEXUS_HTTP_HOST overrides.
 export const DEFAULT_HTTP_PORT = Number(process.env.NEXUS_HTTP_PORT ?? 3939);
-export const DEFAULT_HTTP_HOST = process.env.NEXUS_HTTP_HOST ?? "localhost";
+// 127.0.0.1, not "localhost": agent configs point at 127.0.0.1, and on many
+// systems (macOS, CI runners) "localhost" resolves to IPv6 ::1 first, so the
+// server would listen where no agent connects.
+export const DEFAULT_HTTP_HOST = process.env.NEXUS_HTTP_HOST ?? "127.0.0.1";
 
 /** Options the standalone server starts with. Sessions are not required: an
  *  agent registers with only its workspace (that is all the app's commands
@@ -417,9 +420,9 @@ export function startNexusHttpServer({ port = DEFAULT_HTTP_PORT, host = DEFAULT_
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isEntryFile(import.meta.url)) {
   const port = Number(process.env.NEXUS_HTTP_PORT ?? 3939);
-  const host = process.env.NEXUS_HTTP_HOST ?? "localhost";
+  const host = DEFAULT_HTTP_HOST;
   const { server, port: bound } = await startNexusHttpServer({ port, host, ...ENTRY_OPTIONS });
   console.log(`nexus-http listening on http://${host}:${bound}/mcp`);
   const shutdown = () => server.close(() => process.exit(0));
