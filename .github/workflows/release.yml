@@ -68,7 +68,7 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Nexus Guard ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }} (alpha)
-          releaseBody: Alpha build, unsigned by the OS. Needs Node.js 20 or newer installed. See the README quick start.
+          releaseBody: Alpha build, unsigned by the OS. See the README quick start.
           releaseDraft: true
           # Not a pre-release: GitHub's releases/latest skips pre-releases, so the updater endpoint would 404. "Alpha" stays in the body.
           prerelease: false

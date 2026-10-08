@@ -6,7 +6,7 @@ Nexus sits between AI coding agents and the services they use. It works out whic
 project an agent is in and sends each call to that project's own account and resource,
 so an agent working on one project can't reach another project's services. Made for one
 developer running several agents (Claude Code, Codex, OpenCode) across several projects.
-Platforms: Linux, macOS and Windows (alpha). Needs Node.js 20.10 or newer.
+Platforms: Linux, macOS and Windows (alpha).
 
 ## How it works
 

@@ -1,7 +1,7 @@
 [package]
 name = "nexus-guard"
 default-run = "nexus-guard"
-version = "0.1.2"
+version = "0.2.0"
 description = "Project-aware service connections for coding agents"
 authors = ["you"]
 edition = "2021"
