@@ -122,8 +122,8 @@ test("Phase 2 HTTP defaults: 127.0.0.1 + NEXUS_HTTP_PORT 3939 unified", async ()
 
 test("standalone defaults accept an agent that sends only its workspace", async (t) => {
   assert.equal(ENTRY_OPTIONS.requireSession, false);
-  assert.equal(ENTRY_OPTIONS.enforceVaultLock, true);
-  const server = createNexusHttpServer({ ...ENTRY_OPTIONS, enforceVaultLock: false });
+  assert.equal("enforceVaultLock" in ENTRY_OPTIONS, false, "there is no vault lock");
+  const server = createNexusHttpServer({ ...ENTRY_OPTIONS });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const { port } = server.address();

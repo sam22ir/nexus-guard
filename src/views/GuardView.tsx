@@ -1,4 +1,4 @@
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { CENTRAL_TABLE, VOCAB, resolveOverride } from "../guard";
 import { secondaryBtn, selectClass, badgeStyle } from "../app/styles";

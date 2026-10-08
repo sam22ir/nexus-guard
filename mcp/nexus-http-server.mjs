@@ -24,7 +24,6 @@ import process from "node:process";
 import { isEntryFile } from "./entry.mjs";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { readContext, makeNexusServer, createSessionStore } from "./nexus-server.mjs";
-import { readVaultState, vaultStatePath } from "./vault-state.mjs";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -38,11 +37,12 @@ export const DEFAULT_HTTP_HOST = process.env.NEXUS_HTTP_HOST ?? "127.0.0.1";
 
 /** Options the standalone server starts with. Sessions are not required: an
  *  agent registers with only its workspace (that is all the app's commands
- *  and written configs carry), and access is gated by the vault lock, the
- *  workspace pin, and the MCP session the server creates at initialize.
+ *  and written configs carry), and access is gated by the workspace pin and
+ *  the MCP session the server creates at initialize. The server only runs
+ *  while the desktop app is open.
  *  `POST /session` stays available but is optional, since any local caller
  *  could mint a token anyway. */
-export const ENTRY_OPTIONS = Object.freeze({ enforceVaultLock: true, requireSession: false });
+export const ENTRY_OPTIONS = Object.freeze({ requireSession: false });
 
 /** Resolve the workspace for one request. Returns null when none is supplied
  *  and no explicit default was configured — the caller must then refuse. */
@@ -161,18 +161,11 @@ function isJsonRpc(body) {
   );
 }
 
-export function createNexusHttpServer({ defaultWorkspace = null, enforceVaultLock = false, vaultStateFile = vaultStatePath(), sessionStore = null, requireSession = false } = {}) {
+export function createNexusHttpServer({ defaultWorkspace = null, sessionStore = null, requireSession = false } = {}) {
   const pinnedDefault = defaultWorkspace == null ? null : path.resolve(defaultWorkspace);
   // Phase 2: server-held opaque session store (shared with MCP servers).
   const nexusSessions = sessionStore ?? createSessionStore();
 
-  async function rejectWhenVaultLocked(req, res) {
-    if (!enforceVaultLock || req.method === "DELETE") return false;
-    const state = await readVaultState(vaultStateFile);
-    if (!state.locked) return false;
-    sendJson(res, 423, { ok: false, decision: "block", error: "Nexus vault is locked. Unlock Nexus Guard before using agent tools." });
-    return true;
-  }
   const mcpSessions = new Map();
   const MAX_MCP_SESSIONS = 50;
 
@@ -238,7 +231,6 @@ export function createNexusHttpServer({ defaultWorkspace = null, enforceVaultLoc
       // Phase 2: workspace-bound session mint + revoke.
       if (url.pathname === "/session") {
         if (req.method === "POST") {
-          if (await rejectWhenVaultLocked(req, res)) return;
           let body;
           try {
             body = await readJsonBody(req);
@@ -299,7 +291,6 @@ export function createNexusHttpServer({ defaultWorkspace = null, enforceVaultLoc
       }
 
       if (url.pathname === "/mcp") {
-        if (await rejectWhenVaultLocked(req, res)) return;
         if (!["GET", "POST", "DELETE"].includes(req.method ?? "")) {
           res.writeHead(405, { allow: "GET, POST, DELETE" });
           res.end();
@@ -409,8 +400,8 @@ export function createNexusHttpServer({ defaultWorkspace = null, enforceVaultLoc
   return server;
 }
 
-export function startNexusHttpServer({ port = DEFAULT_HTTP_PORT, host = DEFAULT_HTTP_HOST, defaultWorkspace = null, enforceVaultLock = false, vaultStateFile = vaultStatePath(), sessionStore = null, requireSession = false } = {}) {
-  const server = createNexusHttpServer({ defaultWorkspace, enforceVaultLock, vaultStateFile, sessionStore, requireSession });
+export function startNexusHttpServer({ port = DEFAULT_HTTP_PORT, host = DEFAULT_HTTP_HOST, defaultWorkspace = null, sessionStore = null, requireSession = false } = {}) {
+  const server = createNexusHttpServer({ defaultWorkspace, sessionStore, requireSession });
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {

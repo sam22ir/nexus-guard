@@ -10,7 +10,7 @@
 - Baseline suites: `npm run test:mcp` (34), `cargo test --manifest-path src-tauri/Cargo.toml --lib` (12), `cargo test --manifest-path prototype/nexus-check/Cargo.toml` (15).
 - HTTP server: `NEXUS_HTTP_PORT=3939 node mcp/nexus-http-server.mjs` (or `startNexusHttpServer`), `curl 127.0.0.1:3939/healthz` → `{ok:true}`.
 - Two temp workspaces with canonical manifests: `/tmp/nexus-e2e/{a,b}/.nexus/project.json` → `{project, project_id, environment, connections:{supabase:{account, resource, connection_id, project_ref, method:"mcp", status:"connected"}}}` with distinct `account+resource`.
-- HTTP sessions: the standalone server does not require a token (agents register with only their workspace; the vault lock and workspace pin gate access). When a token is used it is a workspace-bound opaque token: mint via `POST /session`, send `X-Nexus-Session` + `X-Nexus-Workspace` on `/mcp` + `/context`, expect `401` on missing/expired and `403` on cross-workspace use, revoke via `DELETE /session`. Tokens live ~30min with sliding expiry (each validated request extends).
+- HTTP sessions: the standalone server does not require a token (agents register with only their workspace; the workspace pin gates access). When a token is used it is a workspace-bound opaque token: mint via `POST /session`, send `X-Nexus-Session` + `X-Nexus-Workspace` on `/mcp` + `/context`, expect `401` on missing/expired and `403` on cross-workspace use, revoke via `DELETE /session`. Tokens live ~30min with sliding expiry (each validated request extends).
 
 ```bash
 # Mint a workspace-bound session (returns { ok:true, token, expiresAt, workspace }).

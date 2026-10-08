@@ -11,6 +11,7 @@ import {
   createNexusHttpServer,
   startNexusHttpServer,
   resolveWorkspace,
+  ENTRY_OPTIONS,
 } from "./nexus-http-server.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -62,36 +63,25 @@ function assertSecretFree(body) {
   }
 }
 
-// Vault lock enforcement is opt-in for the HTTP bridge so unit fixtures stay
-// deterministic; the standalone bridge enables it in its CLI entrypoint.
-test("enforced HTTP bridge blocks MCP while locked and resumes after unlock", async (t) => {
+// There is no vault lock any more. A lock file left behind by an older build
+// must not stop agents: the server never reads it.
+test("an old locked vault-state file no longer blocks agents", async (t) => {
   const dir = await mktmp(t, "nexus-edge-lock-");
   await mkManifest(t, dir, { project: "Locked", account: "lock-acct", resource: "lock-res" });
   const state = path.join(dir, "vault-state.json");
   await fs.writeFile(state, JSON.stringify({ locked: true }));
-  const base = await boot(t, { defaultWorkspace: dir, enforceVaultLock: true, vaultStateFile: state });
+  const saved = process.env.NEXUS_VAULT_STATE_FILE;
+  process.env.NEXUS_VAULT_STATE_FILE = state;
+  t.after(() => { if (saved === undefined) delete process.env.NEXUS_VAULT_STATE_FILE; else process.env.NEXUS_VAULT_STATE_FILE = saved; });
+  const base = await boot(t, { defaultWorkspace: dir, ...ENTRY_OPTIONS });
 
-  const health = await fetch(`${base}/healthz`);
-  assert.equal(health.status, 200);
-  const context = await fetch(`${base}/context?workspace=${encodeURIComponent(dir)}`);
-  assert.equal(context.status, 200);
-
-  const blocked = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "lock-test", version: "1" } } }),
   });
-  assert.equal(blocked.status, 423);
-  assert.match((await blocked.json()).error, /vault is locked/i);
-
-  await fs.writeFile(state, JSON.stringify({ locked: false }));
-  const allowed = await fetch(`${base}/mcp`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "lock-test", version: "1" } } }),
-  });
-  assert.notEqual(allowed.status, 423);
-  assert.notEqual(allowed.status, 500);
+  assert.notEqual(res.status, 423);
+  assert.equal(res.status, 200);
 });
 
 // 1. Header beats query; missing both -> default workspace.

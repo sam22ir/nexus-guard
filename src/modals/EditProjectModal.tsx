@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { primaryBtn, secondaryBtn, inputClass, selectClass } from "../app/styles";
 import { Note, Modal } from "../app/common";

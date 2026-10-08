@@ -703,7 +703,6 @@ details[open] > summary::after { transform: rotate(45deg); }
 .ob-field.tight { flex: 1; min-width: 100px; }
 .ob-input { padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13.5px; min-height: 38px; transition: opacity 0.4s, border-color 0.3s; }
 .ob-input.empty { opacity: 0.25; }
-.ob-grow { flex: 1; min-width: 0; }
 .ob-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .ob-btn { display: inline-flex; align-items: center; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; font-weight: 500; background: transparent; transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.3s var(--ease); }
 .ob-btn.pressed { background: var(--action-bg); color: var(--action-text); border-color: var(--action-bg); transform: scale(0.97); }

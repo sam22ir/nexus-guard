@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { agentDisplayName, projectDisplayName } from "../topology";
 import { Badge, Icon as NxIcon, type StepState, type Tone } from "../ui";

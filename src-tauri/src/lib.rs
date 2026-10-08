@@ -602,15 +602,12 @@ fn register_nexus_project(
 }
 
 const KEYRING_SERVICE: &str = "com.nexusguard.app";
-const VAULT_PASSWORD_ENTRY: &str = "vault-password-verifier";
+/// Left in the keychain by builds that had a vault password; removed at startup.
+const OLD_VAULT_PASSWORD_ENTRY: &str = "vault-password-verifier";
 
 fn keyring_entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, key)
         .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())
-}
-
-fn password_verifier(password: &str) -> String {
-    base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(password.as_bytes()))
 }
 
 /// The user's home folder: HOME, then USERPROFILE (Windows).
@@ -663,62 +660,6 @@ fn background_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Com
     command
 }
 
-fn vault_state_path() -> PathBuf {
-    if let Ok(explicit) = env::var("NEXUS_VAULT_STATE_FILE") {
-        if !explicit.trim().is_empty() {
-            return PathBuf::from(explicit);
-        }
-    }
-    if let Ok(runtime) = env::var("XDG_RUNTIME_DIR") {
-        if !runtime.trim().is_empty() {
-            return PathBuf::from(runtime).join("nexus-guard-vault-state.json");
-        }
-    }
-    nexus_config_dir().join("vault-state.json")
-}
-
-fn write_vault_state_at(path: &std::path::Path, locked: bool) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| "Nexus could not save the vault lock state.".to_string())?;
-    }
-    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    let payload = serde_json::json!({
-        "locked": locked,
-        "updatedAt": format!("{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
-    });
-    fs::write(&temporary, serde_json::to_vec(&payload).map_err(|_| "Nexus could not save the vault lock state.".to_string())?)
-        .map_err(|_| "Nexus could not save the vault lock state.".to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
-    }
-    fs::rename(&temporary, path).map_err(|_| "Nexus could not save the vault lock state.".to_string())?;
-    Ok(())
-}
-
-fn write_vault_state(locked: bool) -> Result<(), String> {
-    write_vault_state_at(&vault_state_path(), locked)
-}
-
-fn vault_is_unlocked() -> bool {
-    fs::read_to_string(vault_state_path())
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|value| value.get("locked").and_then(|locked| locked.as_bool()))
-        .map(|locked| !locked)
-        .unwrap_or(false)
-}
-
-fn ensure_vault_unlocked_for_key(key: &str) -> Result<(), String> {
-    // MCP approvals are saved immediately after an explicit browser approval.
-    // Typed publishable keys remain gated by the vault lock.
-    if key.starts_with("mcp:") || vault_is_unlocked() {
-        return Ok(());
-    }
-    Err("Unlock the Nexus vault before reading or changing typed keys.".to_string())
-}
-
 fn is_missing_key(error: &keyring::Error) -> bool {
     let message = error.to_string().to_lowercase();
     message.contains("no entry")
@@ -729,44 +670,14 @@ fn is_missing_key(error: &keyring::Error) -> bool {
 }
 
 #[tauri::command]
-fn vault_unlock(password: String) -> Result<bool, String> {
-    if password.len() < 12 {
-        return Err("Use a vault password with at least 12 characters.".to_string());
-    }
-    let entry = keyring_entry(VAULT_PASSWORD_ENTRY)?;
-    let verifier = password_verifier(&password);
-    let unlocked = match entry.get_password() {
-        Ok(saved) => saved == verifier,
-        Err(error) if is_missing_key(&error) => {
-            entry.set_password(&verifier).map_err(|_| {
-                "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string()
-            })?;
-            true
-        }
-        Err(_) => return Err("The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string()),
-    };
-    if unlocked {
-        write_vault_state(false)?;
-    }
-    Ok(unlocked)
-}
-
-#[tauri::command]
-fn vault_lock() -> Result<(), String> {
-    write_vault_state(true)
-}
-
-#[tauri::command]
-fn vault_save_secret(key: String, value: String) -> Result<(), String> {
-    ensure_vault_unlocked_for_key(&key)?;
+fn keychain_save_secret(key: String, value: String) -> Result<(), String> {
     keyring_entry(&key)?
         .set_password(&value)
         .map_err(|_| "The system keychain is unavailable. Unlock it (or sign in to the computer) and try again.".to_string())
 }
 
 #[tauri::command]
-fn vault_has_secret(key: String) -> Result<bool, String> {
-    ensure_vault_unlocked_for_key(&key)?;
+fn keychain_has_secret(key: String) -> Result<bool, String> {
     match keyring_entry(&key)?.get_password() {
         Ok(_) => Ok(true),
         Err(error) if is_missing_key(&error) => Ok(false),
@@ -775,8 +686,7 @@ fn vault_has_secret(key: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn vault_delete_secret(key: String) -> Result<(), String> {
-    ensure_vault_unlocked_for_key(&key)?;
+fn keychain_delete_secret(key: String) -> Result<(), String> {
     let entry = keyring_entry(&key)?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
@@ -868,7 +778,7 @@ fn supabase_organization_names(access_token: &str) -> std::collections::HashMap<
 
 /// List the signed-in user's Supabase projects so the desktop app can offer a
 /// picker after browser approval. The caller holds the OAuth access token only
-/// for this call; Nexus never stores it outside the vault.
+/// for this call; Nexus never stores it outside the system keychain.
 #[tauri::command]
 fn supabase_list_projects(access_token: String) -> Result<Vec<SupabaseProjectSummary>, String> {
     let access_token = access_token.trim().to_string();
@@ -1439,6 +1349,101 @@ fn inspect_project_folder(workspace_path: String) -> Result<FolderInspection, St
     })
 }
 
+/// A service key found in a project's `.env` file. Only the variable's name is
+/// reported, never its value.
+#[derive(Debug, Serialize, PartialEq)]
+struct DirectKey {
+    file: String,
+    name: String,
+    service: String,
+}
+
+/// Variable-name prefixes of services an agent could use directly, skipping
+/// Nexus. Matched case-insensitively at the start of the name.
+const DIRECT_KEY_SERVICES: &[(&str, &str)] = &[
+    ("SUPABASE", "Supabase"), ("GITHUB", "GitHub"), ("GH_", "GitHub"), ("NOTION", "Notion"),
+    ("LINEAR", "Linear"), ("NEON", "Neon"), ("STRIPE", "Stripe"), ("VERCEL", "Vercel"),
+    ("CLOUDFLARE", "Cloudflare"), ("CF_API", "Cloudflare"), ("SENTRY", "Sentry"),
+    ("NETLIFY", "Netlify"), ("RAILWAY", "Railway"), ("POSTHOG", "PostHog"), ("RESEND", "Resend"),
+    ("AIRTABLE", "Airtable"), ("GITLAB", "GitLab"), ("PLANETSCALE", "PlanetScale"),
+    ("FIGMA", "Figma"), ("JIRA", "Jira"), ("ATLASSIAN", "Jira"), ("SANITY", "Sanity"),
+    ("WEBFLOW", "Webflow"), ("CLOUDINARY", "Cloudinary"), ("PAYPAL", "PayPal"),
+    ("MIXPANEL", "Mixpanel"), ("HF_", "Hugging Face"), ("HUGGINGFACE", "Hugging Face"),
+    ("ZAPIER", "Zapier"),
+];
+
+/// Which service a `.env` variable is a usable secret for, if any. Public
+/// values (browser-exposed, publishable, anon, URLs, IDs) are not secrets.
+fn direct_key_service(name: &str) -> Option<&'static str> {
+    let upper = name.trim().to_ascii_uppercase();
+    for public in ["NEXT_PUBLIC_", "VITE_", "PUBLIC_", "EXPO_PUBLIC_", "REACT_APP_", "NUXT_PUBLIC_"] {
+        if upper.starts_with(public) {
+            return None;
+        }
+    }
+    if ["PUBLISHABLE", "ANON", "_URL", "_ID", "_HOST", "_REGION", "_ORG", "_PROJECT"].iter().any(|part| upper.contains(part)) {
+        return None;
+    }
+    if !["TOKEN", "KEY", "SECRET", "PAT", "PASSWORD"].iter().any(|part| upper.contains(part)) {
+        return None;
+    }
+    DIRECT_KEY_SERVICES.iter().find(|(prefix, _)| upper.starts_with(prefix)).map(|(_, service)| *service)
+}
+
+/// Service keys in one `.env`-style text: `NAME=value` lines with a non-empty
+/// value. Comments, blank values and placeholders are ignored.
+fn direct_keys_in_env(file: &str, raw: &str) -> Vec<DirectKey> {
+    let mut found = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else { continue };
+        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        if value.is_empty() || value.starts_with('<') || value.contains("your_") || value.contains("changeme") {
+            continue;
+        }
+        if let Some(service) = direct_key_service(name) {
+            let name = name.trim().to_string();
+            if !found.iter().any(|key: &DirectKey| key.name == name) {
+                found.push(DirectKey { file: file.to_string(), name, service: service.to_string() });
+            }
+        }
+    }
+    found
+}
+
+/// Look for service keys in the project's own `.env` files (`.env`,
+/// `.env.local`, `.env.production`, …; examples and templates are skipped).
+/// An agent that can read them can call the service directly, without Nexus.
+/// Read-only, names only.
+#[tauri::command]
+fn scan_direct_keys(workspace_path: String) -> Vec<DirectKey> {
+    let root = expand_workspace_path(&workspace_path);
+    let Ok(entries) = fs::read_dir(&root) else { return Vec::new() };
+    let mut files: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name == ".env" || name.starts_with(".env."))
+        .filter(|name| !["example", "sample", "template", "dist", "defaults"].iter().any(|skip| name.ends_with(skip)))
+        .collect();
+    files.sort();
+    let mut found = Vec::new();
+    for file in files {
+        let path = root.join(&file);
+        if fs::metadata(&path).map(|meta| meta.len() > 256 * 1024).unwrap_or(true) {
+            continue;
+        }
+        if let Ok(raw) = fs::read_to_string(&path) {
+            found.extend(direct_keys_in_env(&file, &raw));
+        }
+    }
+    found
+}
+
 /// Create a project folder (and parents) for the Add Project flow.
 #[tauri::command]
 fn create_project_folder(workspace_path: String) -> Result<String, String> {
@@ -1481,7 +1486,7 @@ fn valid_token_id(value: &str) -> bool {
 }
 
 /// Live guarded read: fetch the Supabase project behind a saved MCP approval
-/// using the vault token, and return only safe metadata. The token never
+/// using the saved approval token, and return only safe metadata. The token never
 /// leaves the backend or appears in output.
 #[tauri::command]
 fn verify_supabase_connection(
@@ -2229,8 +2234,6 @@ fn probe_http_session(http_url: &str, workspace: &std::path::Path) -> (bool, Str
         }
     } else if status.contains(" 400 ") {
         (false, "Nexus answered but the workspace binding was missing. Re-run connect for this project.".to_string())
-    } else if status.contains(" 423 ") {
-        (false, "Nexus vault is locked. Unlock Nexus Guard and try again.".to_string())
     } else if status.is_empty() {
         (false, "Nexus HTTP server is not reachable. Start it and try again.".to_string())
     } else {
@@ -2309,8 +2312,8 @@ fn test_agent_setup(
             checked = true;
             let key = format!("mcp:supabase:{project_id}:{connection_id}");
             match keyring::Entry::new("com.nexusguard.app", &key).and_then(|entry| entry.get_password()) {
-                Ok(_) => steps.push(AgentSetupTest { step: "Saved approval".to_string(), ok: true, detail: "The vault holds this project's Supabase approval.".to_string() }),
-                Err(_) => steps.push(AgentSetupTest { step: "Saved approval".to_string(), ok: false, detail: "No approval in this vault. Reconnect the service.".to_string() }),
+                Ok(_) => steps.push(AgentSetupTest { step: "Saved approval".to_string(), ok: true, detail: "The keychain holds this project's Supabase approval.".to_string() }),
+                Err(_) => steps.push(AgentSetupTest { step: "Saved approval".to_string(), ok: false, detail: "No saved approval for this project. Reconnect the service.".to_string() }),
             }
         }
         if !checked {
@@ -2425,8 +2428,7 @@ fn remove_nexus_connection(workspace_path: String, provider: String) -> Result<S
 }
 
 /// The local Nexus HTTP server the app keeps running for agents. Owned here so
-/// it stops when the app closes (the vault locks then too, so agents would be
-/// refused anyway).
+/// it stops when the app closes.
 #[derive(Default)]
 struct NexusServer(Mutex<Option<std::process::Child>>);
 
@@ -2488,7 +2490,6 @@ fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
     let mut command = background_command(&node);
     // Hand the server the exact folders this app uses, so the two never disagree.
     command.env("NEXUS_CONFIG_DIR", nexus_config_dir());
-    command.env("NEXUS_VAULT_STATE_FILE", vault_state_path());
     if env::var_os("NEXUS_KEYRING_BIN").is_none() {
         if let Some(keyring) = bundled_keyring_binary() {
             command.env("NEXUS_KEYRING_BIN", keyring);
@@ -3055,10 +3056,10 @@ fn remove_custom_service(slug: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // A new desktop process always starts locked. The HTTP bridge treats
-            // a missing state file as locked as well, so a crash cannot leave a
-            // stale unlocked state behind for normal app startup.
-            let _ = write_vault_state(true);
+            // Earlier builds kept a vault password verifier; it guards nothing now.
+            if let Ok(entry) = keyring_entry(OLD_VAULT_PASSWORD_ENTRY) {
+                let _ = entry.delete_credential();
+            }
             // Bring the local Nexus server up in the background so agents have
             // something to reach without a terminal.
             let handle = app.handle().clone();
@@ -3067,7 +3068,6 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                let _ = write_vault_state(true);
                 { use tauri::Manager; stop_nexus_server(window.app_handle()); }
             }
         })
@@ -3082,11 +3082,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_supabase_mcp_oauth,
             poll_supabase_mcp_oauth,
-            vault_unlock,
-            vault_lock,
-            vault_save_secret,
-            vault_has_secret,
-            vault_delete_secret,
+            keychain_save_secret,
+            keychain_has_secret,
+            keychain_delete_secret,
             write_nexus_project_file,
             register_nexus_project,
             remove_nexus_connection,
@@ -3095,6 +3093,7 @@ pub fn run() {
             detect_agents,
             scan_project_mcp,
             inspect_project_folder,
+            scan_direct_keys,
             create_project_folder,
             current_user,
             verify_supabase_connection,
@@ -3210,6 +3209,30 @@ mod agent_setup_tests {
         assert_eq!(parse_node_major("v18.0.0"), Some(18));
         assert_eq!(parse_node_major("26.3.0"), Some(26));
         assert_eq!(parse_node_major("not node"), None);
+    }
+
+    #[test]
+    fn direct_keys_flag_service_secrets_by_name_only() {
+        let raw = "# comment\nSUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi.secret\nexport GITHUB_TOKEN=\"ghp_x\"\nNEXT_PUBLIC_SUPABASE_ANON_KEY=public\nSUPABASE_URL=https://x.supabase.co\nSTRIPE_PUBLISHABLE_KEY=pk_test\nSTRIPE_SECRET_KEY=\nLINEAR_API_KEY=<your key>\nNOTION_TOKEN=secret_abc\nDATABASE_URL=postgres://x\nOPENAI_API_KEY=sk-x\nSUPABASE_SERVICE_ROLE_KEY=again\n";
+        let found = direct_keys_in_env(".env.local", raw);
+        let names: Vec<&str> = found.iter().map(|key| key.name.as_str()).collect();
+        assert_eq!(names, ["SUPABASE_SERVICE_ROLE_KEY", "GITHUB_TOKEN", "NOTION_TOKEN"]);
+        assert_eq!(found[1].service, "GitHub");
+        assert!(found.iter().all(|key| key.file == ".env.local"));
+        let reported = serde_json::to_string(&found).unwrap();
+        assert!(!reported.contains("ghp_x") && !reported.contains("secret_abc"), "values are never reported");
+    }
+
+    #[test]
+    fn direct_key_scan_reads_env_files_and_skips_examples() {
+        let dir = unique_dir("nexus-direct-keys");
+        fs::write(dir.join(".env"), "GH_TOKEN=abc\n").unwrap();
+        fs::write(dir.join(".env.example"), "SUPABASE_ACCESS_TOKEN=real-looking\n").unwrap();
+        fs::write(dir.join("notes.txt"), "NOTION_TOKEN=abc\n").unwrap();
+        let found = scan_direct_keys(dir.to_string_lossy().into_owned());
+        assert_eq!(found, vec![DirectKey { file: ".env".into(), name: "GH_TOKEN".into(), service: "GitHub".into() }]);
+        assert!(scan_direct_keys(dir.join("missing").to_string_lossy().into_owned()).is_empty());
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// Same cases as mcp/config-dir.test.mjs, so the app and server agree.
@@ -3358,17 +3381,6 @@ mod agent_setup_tests {
             }
             fs::remove_dir_all(&dir).ok();
         }
-    }
-
-    #[test]
-    fn vault_state_roundtrip_defaults_to_locked_and_writes_secret_free_state() {
-        let dir = unique_dir("nexus-vault-state");
-        let state = dir.join("vault-state.json");
-        write_vault_state_at(&state, false).unwrap();
-        let raw = fs::read_to_string(&state).unwrap();
-        assert!(raw.contains("\"locked\":false"));
-        assert!(!raw.to_lowercase().contains("password"));
-        fs::remove_dir_all(&dir).ok();
     }
 
     fn unique_dir(prefix: &str) -> PathBuf {

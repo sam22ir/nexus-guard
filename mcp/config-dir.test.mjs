@@ -5,7 +5,6 @@ import { bindingScopesPath } from "./binding-scopes.mjs";
 import { homeDir, nexusConfigDir } from "./config-dir.mjs";
 import { keyringBinary } from "./nexus-server.mjs";
 import { customServicesPath } from "./providers.mjs";
-import { vaultStatePath } from "./vault-state.mjs";
 import { writeGrantsPath } from "./write-grants.mjs";
 
 // The same cases are checked on the Rust side (`config_dir_per_platform` in
@@ -45,9 +44,6 @@ test("every settings file lives in the one config folder", () => {
   assert.equal(writeGrantsPath(env), path.join(dir, "write-grants.json"));
   assert.equal(bindingScopesPath(env), path.join(dir, "binding-scopes.json"));
   assert.equal(customServicesPath(env), path.join(dir, "custom-services.json"));
-  assert.equal(vaultStatePath(env), path.join(dir, "vault-state.json"), "no runtime folder: the vault state sits with the settings");
-  assert.equal(vaultStatePath({ ...env, XDG_RUNTIME_DIR: "/run/user/1" }), path.join("/run/user/1", "nexus-guard-vault-state.json"));
-  assert.equal(vaultStatePath({ ...env, NEXUS_VAULT_STATE_FILE: "/v/state.json" }), path.resolve("/v/state.json"));
 });
 
 test("keychain helper: the app's copy, else the debug build with the right file name", () => {

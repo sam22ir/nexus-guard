@@ -32,7 +32,7 @@ allow. Unknown providers read as `self-added` (not curated); enforcement is iden
 
 Only Supabase + GitHub are native in this scaffold. Read-only allowlists only; writes blocked by deterministic policy. Supabase URL uses `project_ref` + `read_only=true`.
 
-Session (§6): the server creates one MCP session per agent connection at `initialize` and re-validates context on every request. Registering needs only the workspace (`?workspace=` or `X-Nexus-Workspace`); the vault lock (`423`) and the workspace pin gate access. Optional workspace-bound opaque tokens can still be minted via `POST /session` (~30min sliding TTL): when sent as `X-Nexus-Session`, a missing or expired token → `401` and cross-workspace use → `403`. The standalone server does not require them (`ENTRY_OPTIONS.requireSession` is `false`); `createNexusHttpServer({ requireSession: true })` enforces them for tests and stricter embeds.
+Session (§6): the server creates one MCP session per agent connection at `initialize` and re-validates context on every request. Registering needs only the workspace (`?workspace=` or `X-Nexus-Workspace`); the workspace pin gates access. Optional workspace-bound opaque tokens can still be minted via `POST /session` (~30min sliding TTL): when sent as `X-Nexus-Session`, a missing or expired token → `401` and cross-workspace use → `403`. The standalone server does not require them (`ENTRY_OPTIONS.requireSession` is `false`); `createNexusHttpServer({ requireSession: true })` enforces them for tests and stricter embeds.
 
 ```bash
 # Optional: mint (workspace-bound) → use → revoke. Port follows NEXUS_HTTP_PORT (default 3939).
@@ -67,16 +67,9 @@ Agents reach one persistent local Nexus over HTTP:
   workspace; the desktop app (Accounts → Agents) writes that project's path into the agent's
   own config. An established MCP session stays pinned to the workspace it was
   created with and does not have to resend the header.
-- The standalone HTTP bridge enables fail-closed vault locking. It reads the
-  secret-free state file selected by `NEXUS_VAULT_STATE_FILE`, then
-  `XDG_RUNTIME_DIR`, then `vault-state.json` in the app's settings folder
-  (below). The desktop app passes both paths to the server it starts. A missing
-  or damaged state file is locked. `/healthz` and safe `GET /context` remain
-  available (carve-outs), `DELETE` session teardown is allowed, while other
-  `/mcp` requests return HTTP `423` until the desktop app unlocks.
-  Direct stdio bridges do not share this desktop lock state and bypass the
-  lock entirely — stdio is archived (see appendix) and must not be used
-  where lock enforcement matters.
+- The local server runs only while the desktop app is open; the desktop app starts
+  and stops it. There is no vault lock and no state file: agent requests are not
+  refused for being locked. Stdio bridges are archived (see appendix); use the HTTP endpoint.
 - Workspace discovery: an explicit `X-Nexus-Workspace` header or `?workspace=` always wins. Without one, a client that declares the MCP `roots` capability is bound at its first tool call from its single `file://` root; zero, several, or later-changed roots are refused, never guessed. Clients without roots must send the workspace. Under `requireSession` the agent still needs a session token, which is minted for a workspace.
 - Routing resolves the binding (provider→account→resource). Post-MVP Guard
   would decide the operation, never on a bare service name.

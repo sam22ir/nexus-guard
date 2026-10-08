@@ -18,9 +18,8 @@ Agent → Project → Account → Resource
 3. Nexus makes the call with that account's login. The agent never sees the key.
 
 Setup in the app has three steps: pick the project folder, connect an agent (one click
-writes the agent's MCP config in the project, with a backup), then unlock Nexus and watch
-the agent's first real call arrive. Nexus starts locked and refuses agent calls until
-it is unlocked.
+writes the agent's MCP config in the project, with a backup), then restart the agent in
+that folder and watch its first real call arrive. Nexus runs while the app is open.
 
 ## What is covered
 

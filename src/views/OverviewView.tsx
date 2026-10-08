@@ -1,18 +1,30 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { manifestAccountFor, tierForProvider, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey, blastRadiusWarningsFor } from "../accounts";
 import { agentDisplayName } from "../topology";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
-import { type NavTarget, type FolderInspection } from "../app/types";
+import { type NavTarget, type FolderInspection, type DirectKey } from "../app/types";
 import { StatusDot, Card, CardHeading } from "../app/common";
 import { timeAgo, useAuditLog, AuditRow } from "../app/audit";
 
 export function Overview({ project, projects, accounts, onView, onAddConnection, onConnectAgent }: { project: Project; projects: Project[]; accounts: Account[]; onView: (view: NavTarget) => void; onAddConnection: () => void; onConnectAgent: () => void }) {
   const { entries } = useAuditLog(projects);
   const [diskCheck, setDiskCheck] = useState<FolderInspection | null>(null);
+  // Service keys sitting in the project's .env files: an agent that can read
+  // them can call the service directly and skip Nexus. Names only.
+  const [directKeys, setDirectKeys] = useState<DirectKey[]>([]);
+  useEffect(() => {
+    setDirectKeys([]);
+    if (!desktopAvailable() || !project.path) return;
+    let cancelled = false;
+    invoke<DirectKey[]>("scan_direct_keys", { workspacePath: project.path })
+      .then((keys) => { if (!cancelled) setDirectKeys(keys); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [project.id, project.path]);
   const [verifying, setVerifying] = useState(false);
   const [overwriting, setOverwriting] = useState(false);
   const [liveCheck, setLiveCheck] = useState<{ ok: boolean; text: string } | null>(null);
@@ -179,6 +191,20 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
             </span>
           )}
         </div>
+      )}
+
+      {directKeys.length > 0 && (
+        <Card className="shrink-0 !py-3">
+          <div className="flex items-start gap-3">
+            <span className="nx-tile" data-tone="warning"><NxIcon name="key" size={16} /></span>
+            <div className="min-w-0 flex-1">
+              <strong className="text-[13px] font-semibold text-(--text)">Agents can skip Nexus with keys in this folder</strong>
+              <p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">
+                {[...new Set(directKeys.map((k) => k.service))].join(", ")} {directKeys.length === 1 ? "has a key" : "have keys"} in {[...new Set(directKeys.map((k) => k.file))].join(", ")}: <span className="nx-mono">{directKeys.map((k) => k.name).join(", ")}</span>. An agent that reads {directKeys.length === 1 ? "it" : "them"} can call the service directly, and Nexus can't see or stop that. Move keys the app itself doesn't need out of the project, or keep agents from reading these files.
+              </p>
+            </div>
+          </div>
+        </Card>
       )}
 
       {diskCheck && diskDiffers && (

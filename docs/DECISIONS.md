@@ -11,10 +11,13 @@
 | 2026-09-28 | MVP simplified: agents connect to Nexus, Nexus connects to services registered once. Guard out of MVP, possible paid feature | Locked | §4, §14 |
 | 2026-09-28 | No whole-page scrolling in any tab | Locked | §8 |
 | 2026-09-29 | Execution model: agents call through Nexus, Nexus forwards with the bound account's credentials, agents never hold keys | Locked | §3, §8 |
-| 2026-09-29 | MVP catalog: about 50 services by category (final list pending) | Locked | §13 |
+| 2026-09-29 | MVP catalog: about 50 services by category (final list pending) | Superseded 2026-10-08 | §13 |
 | 2026-09-29 | Topology view is MVP: drag-to-link with explicit confirm, fixed columns, canvas never writes directly | Locked | §12 |
 | 2026-09-29 | Themes: dark and light, system default with manual toggle (supersedes dark-only) | Locked | §11 |
 | 2026-09-29 | Component library: HeroUI v3, adopted gradually | Locked | §11 |
+| 2026-10-08 | Services fail closed: only tools a service marks read-only (readOnlyHint true, not destructiveHint) pass; writes need "Allow safe writes" per binding, never in production. Applies to sign-in (curated) and self-added services; native Supabase/GitHub allowlists stay | Locked | — |
+| 2026-10-08 | No fixed ~50-service catalog target: ship Supabase + GitHub built in, the 24 sign-in services in mcp/services.json, and user-added services; add more on tester demand | Locked | — |
+| 2026-10-08 | Vault lock removed: no app password; service logins live in the system keychain; the server runs only while the app is open | Locked | — |
 
 ## Standing rules (paper §8, §14)
 
