@@ -1944,7 +1944,7 @@ const FAQ: [string, string][] = [
   ["How does Nexus know which project an agent is in?", "It reads the project file in the folder and checks the Git remote. Claude Code and OpenCode tell Nexus their folder. Codex doesn't, so its folder is pinned in its config. If Nexus can't tell, or the clues disagree, it refuses and shows you why."],
   ["Is every service held to one resource?", "Supabase is held to one project and GitHub to one repository. Some sign-in services can be limited to one project, site or base. The rest are kept to the right account, but Nexus can't tell resources apart inside it, so use one account per project for those."],
   ["Can an agent change Nexus's own settings?", "Not through Nexus, and not from inside the project folder. But an agent allowed to run shell commands as you could edit the settings files on your computer. Nexus is a guard rail for agent calls, not a sandbox."],
-  ["Which computers does it run on?", "Linux, macOS and Windows. Linux is the one tested most; macOS and Windows builds are new. You need Node.js 20.10 or newer, which the app uses to run its local server."],
+  ["Which computers does it run on?", "Linux, macOS and Windows. Linux is the one tested most; macOS and Windows builds are new."],
   ["Why does my computer warn me when I open it?", "Alpha builds are not signed yet. On macOS, right-click the app and choose Open. On Windows, choose More info, then Run anyway."],
   ["What does it cost?", "The alpha is free. Later, the core stays free; paid plans add unlimited projects and longer history. Prices may change."],
 ];
@@ -2126,7 +2126,6 @@ function DownloadSection() {
           </>
         )}
         <ul className="dl-needs">
-          <li><Check size={14} weight="bold" /> Node.js 20.10 or newer</li>
           <li><Check size={14} weight="bold" /> A coding agent: Claude Code, Codex or OpenCode</li>
           <li><Check size={14} weight="bold" /> A project folder you work in</li>
         </ul>

@@ -34,7 +34,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 25.5+ is needed to build the standalone server (Node SEA with an ES module).
+          node-version: 26
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -55,7 +56,62 @@ jobs:
 
       - run: npm run test:mcp
 
+      # macOS signing and notarization. Runs only when the Apple secrets exist
+      # (see docs/code-signing.md). Each value is exported to GITHUB_ENV only if
+      # non-empty, so tauri-action sees the variable absent, not empty, when a
+      # secret is missing. Without them the macOS build stays unsigned.
+      # Values are never printed.
+      # UNVERIFIED: the Tauri docs do not say whether bundle.externalBin
+      # sidecars (nexus-keyring, nexus-server) get signed with the app identity.
+      # Check on the first signed build with `codesign -dv --verbose=4` on each
+      # binary inside the .app. The Node-based nexus-server may also need
+      # hardened-runtime entitlements (JIT) to run after notarization; verify too.
+      - name: Apple signing setup (macOS, only if secrets exist)
+        if: startsWith(matrix.os, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              delim="EOF_${name}_${RANDOM}${RANDOM}"
+              {
+                echo "$name<<$delim"
+                printf '%s\n' "$value"
+                echo "$delim"
+              } >> "$GITHUB_ENV"
+            fi
+          done
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "macOS signing: on"
+          else
+            echo "macOS signing: off (unsigned build)"
+          fi
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            echo "macOS notarization: on"
+          else
+            echo "macOS notarization: off"
+          fi
+
+      # Windows: left unsigned. Two routes are possible once a signing service
+      # is chosen (see docs/code-signing.md):
+      #   1. SignPath (free for open source, needs an OSI license in the repo):
+      #      add a step after the build that uploads the .exe/.msi to SignPath
+      #      and replaces the file with the signed one.
+      #   2. Tauri's own signing: set bundle.windows.signCommand in
+      #      src-tauri/tauri.conf.json. Tauri reads it from the config, not
+      #      from an environment variable, so it cannot be toggled by a secret.
+      # - name: Windows signing (not wired yet)
+      #   if: startsWith(matrix.os, 'windows')
+      #   run: echo "Windows signing not configured"
+
       - uses: tauri-apps/tauri-action@v0
+        id: build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the updater files (.sig, latest.json). Required: with createUpdaterArtifacts on, the build fails without them.
@@ -67,10 +123,91 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Nexus Guard ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }} (alpha)
-          releaseBody: Alpha build, unsigned by the OS. Needs Node.js 20 or newer installed. See the README quick start.
+          releaseBody: Alpha build, unsigned by the OS. See the README quick start.
           releaseDraft: true
           # Not a pre-release: GitHub's releases/latest skips pre-releases, so the updater endpoint would 404. "Alpha" stays in the body.
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      # Test the installers that were just built, the way users install them.
+      # These steps run AFTER tauri-action has created the DRAFT release. If any of
+      # them fails, this job fails and the draft must not be published.
+      - name: Test the Linux .deb
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(src-tauri/target/release/bundle/deb/*.deb)
+          if [ ${#debs[@]} -ne 1 ]; then echo "Expected one .deb, found ${#debs[@]}."; exit 1; fi
+          rm -rf "$RUNNER_TEMP/pkg"
+          dpkg -x "${debs[0]}" "$RUNNER_TEMP/pkg"
+          # Tauri installs external binaries into /usr/bin inside the .deb.
+          server=$(find "$RUNNER_TEMP/pkg" -type f -name nexus-server -path '*/usr/bin/*')
+          keyring=$(find "$RUNNER_TEMP/pkg" -type f -name nexus-keyring -path '*/usr/bin/*')
+          if [ -z "$server" ] || [ -z "$keyring" ]; then
+            echo "The .deb does not contain nexus-server and nexus-keyring under usr/bin. Files:"
+            find "$RUNNER_TEMP/pkg" -type f
+            exit 1
+          fi
+          echo "Packaged server: $server"
+          echo "Packaged keyring: $keyring"
+          node scripts/smoke-installer.mjs "$server" "$keyring"
+
+      - name: Test the macOS .dmg
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          triple=$(echo "${{ matrix.args }}" | sed -E 's/.*--target ([^ ]+).*/\1/')
+          dmgs=(src-tauri/target/$triple/release/bundle/dmg/*.dmg)
+          if [ ${#dmgs[@]} -ne 1 ]; then echo "Expected one .dmg for $triple, found ${#dmgs[@]}."; exit 1; fi
+          mnt="$RUNNER_TEMP/dmg"
+          mkdir -p "$mnt"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "${dmgs[0]}"
+          trap 'hdiutil detach "$mnt" -quiet || true' EXIT
+          rm -rf "$RUNNER_TEMP/app"
+          mkdir -p "$RUNNER_TEMP/app"
+          cp -R "$mnt/Nexus Guard.app" "$RUNNER_TEMP/app/"
+          hdiutil detach "$mnt" -quiet
+          trap - EXIT
+          macos="$RUNNER_TEMP/app/Nexus Guard.app/Contents/MacOS"
+          ls -l "$macos"
+          server="$macos/nexus-server"
+          keyring="$macos/nexus-keyring"
+          if [ "$triple" = "aarch64-apple-darwin" ]; then
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch arm64
+          elif arch -x86_64 /usr/bin/true 2>/dev/null; then
+            # Intel build on an Apple Silicon runner: run it under Rosetta.
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch x86_64 --run-under x86_64
+          else
+            echo "::notice::Rosetta is not installed on this runner, so the Intel build is only checked for its files and architecture."
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch x86_64 --files-only
+          fi
+
+      - name: Test the Windows setup.exe
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if ($setup.Count -ne 1) { throw "Expected one setup.exe, found $($setup.Count)." }
+          # The NSIS installer installs per user; /S is its silent mode.
+          $install = Start-Process -Wait -PassThru -FilePath $setup[0].FullName -ArgumentList '/S'
+          if ($install.ExitCode -ne 0) { throw "The silent install exited with $($install.ExitCode)." }
+          $server = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Nexus Guard\nexus-server.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Nexus Guard\nexus-server.exe')
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $server) {
+            # Not where expected: search the per-user app data for it.
+            $server = (Get-ChildItem $env:LOCALAPPDATA -Filter nexus-server.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if (-not $server) { throw "nexus-server.exe was not found under $env:LOCALAPPDATA after the install." }
+          $keyring = Join-Path (Split-Path $server) 'nexus-keyring.exe'
+          Write-Host "Installed server: $server"
+          node scripts/smoke-installer.mjs $server $keyring
+          if ($LASTEXITCODE -ne 0) { throw "The installer smoke test failed ($LASTEXITCODE)." }
