@@ -56,6 +56,60 @@ jobs:
 
       - run: npm run test:mcp
 
+      # macOS signing and notarization. Runs only when the Apple secrets exist
+      # (see docs/code-signing.md). Each value is exported to GITHUB_ENV only if
+      # non-empty, so tauri-action sees the variable absent, not empty, when a
+      # secret is missing. Without them the macOS build stays unsigned.
+      # Values are never printed.
+      # UNVERIFIED: the Tauri docs do not say whether bundle.externalBin
+      # sidecars (nexus-keyring, nexus-server) get signed with the app identity.
+      # Check on the first signed build with `codesign -dv --verbose=4` on each
+      # binary inside the .app. The Node-based nexus-server may also need
+      # hardened-runtime entitlements (JIT) to run after notarization; verify too.
+      - name: Apple signing setup (macOS, only if secrets exist)
+        if: startsWith(matrix.os, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              delim="EOF_${name}_${RANDOM}${RANDOM}"
+              {
+                echo "$name<<$delim"
+                printf '%s\n' "$value"
+                echo "$delim"
+              } >> "$GITHUB_ENV"
+            fi
+          done
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "macOS signing: on"
+          else
+            echo "macOS signing: off (unsigned build)"
+          fi
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            echo "macOS notarization: on"
+          else
+            echo "macOS notarization: off"
+          fi
+
+      # Windows: left unsigned. Two routes are possible once a signing service
+      # is chosen (see docs/code-signing.md):
+      #   1. SignPath (free for open source, needs an OSI license in the repo):
+      #      add a step after the build that uploads the .exe/.msi to SignPath
+      #      and replaces the file with the signed one.
+      #   2. Tauri's own signing: set bundle.windows.signCommand in
+      #      src-tauri/tauri.conf.json. Tauri reads it from the config, not
+      #      from an environment variable, so it cannot be toggled by a secret.
+      # - name: Windows signing (not wired yet)
+      #   if: startsWith(matrix.os, 'windows')
+      #   run: echo "Windows signing not configured"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
