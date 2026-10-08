@@ -58,6 +58,7 @@ Agents reach one persistent local Nexus over HTTP:
 
 - URL: `http://localhost:<port>/mcp` (`NEXUS_HTTP_PORT`, default 3939).
   Start it with `NEXUS_HTTP_PORT=3939 node mcp/nexus-http-server.mjs`.
+- DNS-rebinding guard (`mcp/local-origin.mjs`) runs before every route: the `Host` header must be `127.0.0.1`, `localhost` or `[::1]` (with or without a port), and any `Origin` header is refused. Refusals are `403` with a plain reason; web pages cannot reach Nexus.
 - Workspace is pinned per request (`X-Nexus-Workspace` header or
   `?workspace=` query). Two sessions never share mutable current project.
 - **A request that names no workspace is refused** (`400`, `status: unresolved`).
