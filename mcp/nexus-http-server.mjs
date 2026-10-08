@@ -24,6 +24,7 @@ import process from "node:process";
 import { isEntryFile } from "./entry.mjs";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { readContext, makeNexusServer, createSessionStore } from "./nexus-server.mjs";
+import { checkLocalRequest } from "./local-origin.mjs";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -219,6 +220,13 @@ export function createNexusHttpServer({ defaultWorkspace = null, sessionStore = 
       url = new URL(req.url ?? "/", "http://localhost");
     } catch {
       sendJson(res, 400, { ok: false, error: "Bad request." });
+      return;
+    }
+
+    // DNS-rebinding guard: before any route, refuse foreign Host or any Origin.
+    const local = checkLocalRequest(req.headers);
+    if (!local.ok) {
+      sendJson(res, 403, { ok: false, error: local.reason });
       return;
     }
 
