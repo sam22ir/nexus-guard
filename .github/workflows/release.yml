@@ -59,13 +59,19 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater files (.sig, latest.json). Required: with createUpdaterArtifacts on, the build fails without them.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Public identifiers for the Nexus GitHub App (docs/github-app-setup.md). Unset = GitHub shows as not set up.
           NEXUS_GITHUB_CLIENT_ID: ${{ vars.NEXUS_GITHUB_CLIENT_ID }}
           NEXUS_GITHUB_APP_SLUG: ${{ vars.NEXUS_GITHUB_APP_SLUG }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
-          releaseName: Nexus Guard ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
-          releaseBody: Unsigned build. Needs Node.js 20 or newer installed. See the README quick start.
+          releaseName: Nexus Guard ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }} (alpha)
+          releaseBody: Alpha build, unsigned by the OS. Needs Node.js 20 or newer installed. See the README quick start.
           releaseDraft: true
-          prerelease: true
+          # Not a pre-release: GitHub's releases/latest skips pre-releases, so the updater endpoint would 404. "Alpha" stays in the body.
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}

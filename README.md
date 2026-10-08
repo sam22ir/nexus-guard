@@ -24,6 +24,8 @@ Building an installer from source needs **Node.js 25.5 or newer** (the build pac
 - **Windows:** SmartScreen may say it protected your PC; choose More info, then Run anyway.
 - **Linux:** use the `.deb`, or make the `.AppImage` executable and run it.
 
+**Updates:** installed builds from 0.2 check for updates when the app starts and offer "Install and restart" when a newer version exists. AppImage, macOS and Windows installs update this way; `.deb` and `.rpm` installs update by hand. Updates are signed, and the app only installs one whose signature matches the public key built into it.
+
 Settings live in `~/.config/nexus-guard` (Linux), `~/Library/Application Support/nexus-guard` (macOS) or `%APPDATA%\nexus-guard` (Windows).
 
 **From source:** also install Rust (via [rustup](https://rustup.rs)) and the [Tauri desktop libraries](https://tauri.app/start/prerequisites/) for your OS, then:

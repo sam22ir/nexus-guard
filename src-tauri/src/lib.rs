@@ -3073,8 +3073,10 @@ fn remove_custom_service(slug: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             // Earlier builds kept a vault password verifier; it guards nothing now.
             if let Ok(entry) = keyring_entry(OLD_VAULT_PASSWORD_ENTRY) {
                 let _ = entry.delete_credential();
@@ -3091,7 +3093,10 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_process::init());
+    builder
         .manage(OAuthManager::default())
         .manage(NexusServer::default())
         .manage(McpOAuthManager::default())
