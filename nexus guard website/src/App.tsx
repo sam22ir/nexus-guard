@@ -775,7 +775,7 @@ function Problem() {
 /* ---------- How it works: the app's real first-run setup, replayed ---------- */
 const OB_STEPS = ["Project", "Agent", "See it work"] as const;
 /* How many beats each step plays before the demo moves on. */
-const OB_BEATS = [3, 3, 6];
+const OB_BEATS = [3, 3, 5];
 const OB_PROMPT = "Which Nexus project am I in?";
 /* Text that types itself in. The part not typed yet stays in the layout but is
    invisible, so nothing jumps or re-wraps while it types. */
@@ -864,9 +864,8 @@ function OnboardingDemo() {
   const summaries = ["~/Projects/Koupa", "Claude Code", "First call seen"];
   const registered = step > 0 || beat >= 3;
   const agentOn = step > 1 || (step === 1 && beat >= 2);
-  const unlocked = step === last && beat >= 1;
-  const called = step === last && beat >= 4;
-  const bound = step === last && beat >= 6;
+  const called = step === last && beat >= 3;
+  const bound = step === last && beat >= 5;
   const claude = AGENT_LOGOS[0];
   const line = (on: boolean) => (
     <svg className="ob-conn" width="44" height="12" aria-hidden="true">
@@ -926,20 +925,13 @@ function OnboardingDemo() {
             {step === 2 && (
               <>
                 <h3>See your agent reach Nexus</h3>
-                <p>Nexus starts locked and refuses every agent call until you unlock it. Then restart Claude Code in the project, say yes when it asks to trust the "nexus" server, and send it one message.</p>
-                <div className="ob-box">
-                  <span className="label">Vault password</span>
-                  <div className="ob-row">
-                    <div className="ob-input mono ob-grow"><Typed text="••••••••••••••" on={beat >= 1} instant={instant} /></div>
-                    <span aria-hidden="true" className={`ob-btn ${unlocked ? "pressed" : ""}`}>{unlocked ? "Unlocked" : "Unlock Nexus"}</span>
-                  </div>
-                </div>
-                {beat >= 2 && <div className="ob-note ob-pop mono"><Typed text={OB_PROMPT} on instant={instant} /></div>}
-                {beat >= 3 && !called && <div className="ob-note ob-pop">Waiting for Claude Code's first call. This updates by itself.</div>}
+                <p>Restart Claude Code in the project, say yes when it asks to trust the "nexus" server, and send it one message.</p>
+                {beat >= 1 && <div className="ob-note ob-pop mono"><Typed text={OB_PROMPT} on instant={instant} /></div>}
+                {beat >= 2 && !called && <div className="ob-note ob-pop">Waiting for Claude Code's first call. This updates by itself.</div>}
                 {called && (
                   <>
                     <div className="ob-note ok ob-pop"><Typed text="Claude Code called Nexus just now: nexus_context · allowed." on instant={instant} /></div>
-                    {beat >= 5 && <div className="ob-note ob-pop"><Typed text="Without Nexus, an agent in Koupa could have reached Nabdh's resources. Here that call is refused before it leaves your machine." on instant={instant} /></div>}
+                    {beat >= 4 && <div className="ob-note ob-pop"><Typed text="Without Nexus, an agent in Koupa could have reached Nabdh's resources. Here that call is refused before it leaves your machine." on instant={instant} /></div>}
                   </>
                 )}
                 {bound && <div className="ob-bound ob-pop"><Check size={14} weight="bold" /><b>Optional · bound Supabase</b><code>koupa-production</code></div>}
@@ -986,7 +978,7 @@ function OnboardingDemo() {
                 )}
               </div>
             )}
-            {called && beat >= 5 && (
+            {called && beat >= 4 && (
               <div className="ob-node ob-refused ob-pop">
                 <span className="ob-tile" style={{ background: "var(--red-bg)" }}><FolderSimple size={16} weight="bold" /></span>
                 <span><b>Nabdh · nabdh-development</b><small>Refused: another project</small></span>
@@ -1829,7 +1821,7 @@ function Inside() {
             </div>
           </article>
         </div>
-        <p className="fine">Previews are examples of what the app shows. Nexus starts locked each time it opens and refuses agent calls until you unlock it.</p>
+        <p className="fine">Previews are examples of what the app shows. Nexus runs while the app is open; close the app and agents can't reach it.</p>
       </div>
     </section>
   );

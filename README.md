@@ -55,7 +55,7 @@ The desktop interface (dark and light themes, following the system setting) is n
 - service connections;
 - routing status (Guard is post-MVP);
 - activity history;
-- a desktop approval-store setup/lock screen (OS-keychain-backed);
+- a desktop approval-store setup screen (service logins and typed keys in the OS keychain);
 - a Supabase publishable-key form in the desktop app.
 
 The ~50-service catalog (paper §13) is bundled offline; its final list is
@@ -88,14 +88,13 @@ npm run tauri dev
 
 The app is being built with Tauri, React, TypeScript, Vite, and Rust.
 
-## Approval-store limits (legacy “vault” screen)
+## Approval-store limits
 
-The desktop app uses the operating system's secure keychain as an
-OS-keychain-backed approval store. The password screen locks typed key access, and the app writes a secret-free lock state for the local Nexus bridge. The persistent HTTP bridge refuses agent MCP requests while locked (HTTP `423`) and resumes after unlock. Health checks and safe project context stay available.
+The desktop app stores service logins and typed keys in the operating system's secure keychain (Linux secret service, macOS Keychain, Windows Credential Manager). There is no app password and no lock. The local Nexus server runs only while the desktop app is open; the app starts and stops it.
 
-The app shows saved project/service names, but never displays the key values. The stdio bridge is archived (see [mcp/README](mcp/README.md) appendix): the persistent HTTP endpoint is the only supported transport, and the only path where lock enforcement applies to agent calls.
+The app shows saved project/service names, but never displays the key values. The stdio bridge is archived (see [mcp/README](mcp/README.md) appendix): the persistent HTTP endpoint is the only supported transport.
 
-The browser preview (`npm run dev`) does not unlock the keychain or accept keys. This is an early approval store, not a finished credential broker. Nexus cannot yet verify which Supabase project owns a key, connect a coding agent, or protect commands run outside Nexus.
+The browser preview (`npm run dev`) does not use the keychain or accept keys. This is an early approval store, not a finished credential broker. Nexus cannot yet verify which Supabase project owns a key, connect a coding agent, or protect commands run outside Nexus.
 
 The Linux desktop app has built and opened successfully on Linux Mint 22. macOS and Windows have platform code paths (settings folder, keychain, finding Node and agents) and a CI workflow (`.github/workflows/ci.yml`) runs the same tests on them, but neither app has been opened and used by a person yet. `npm run build` checks the web interface only; `npm run tauri dev` opens the desktop app.
 

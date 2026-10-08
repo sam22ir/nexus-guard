@@ -1,7 +1,7 @@
-// The app's own settings folder (write grants, binding scopes, custom services,
-// and the vault lock state when there is no runtime folder). It must match
-// `nexus_config_dir` in src-tauri/src/lib.rs, and the app passes its choice to
-// the server it starts through NEXUS_CONFIG_DIR, so the two always agree.
+// The app's own settings folder (write grants, binding scopes, custom services).
+// It must match `nexus_config_dir` in src-tauri/src/lib.rs, and the app passes
+// its choice to the server it starts through NEXUS_CONFIG_DIR, so the two
+// always agree.
 //   Linux:   $XDG_CONFIG_HOME/nexus-guard, else ~/.config/nexus-guard
 //   macOS:   ~/Library/Application Support/nexus-guard
 //   Windows: %APPDATA%\nexus-guard

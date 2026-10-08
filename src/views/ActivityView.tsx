@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { Button } from "@heroui/react";
 import { Empty, Icon as NxIcon, Segmented } from "../ui";

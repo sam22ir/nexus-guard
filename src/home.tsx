@@ -5,7 +5,7 @@ import { accountGroupKey } from "./accounts";
 import { TopologyGraph, agentDisplayName, agentInitials, projectDisplayName, type PendingLinkRequest, type TopologyEnv, type TopologySelection, type TopologySession } from "./topology";
 import { Button } from "@heroui/react";
 import { Badge, Card, CardHead, Empty, Icon, Segmented, StepRow, type StepState, type Tone } from "./ui";
-import { desktopAvailable } from "./vault";
+import { desktopAvailable } from "./keychain";
 import { type NavTarget } from "./app/types";
 
 export type HomeNavTarget = NavTarget;

@@ -36,4 +36,6 @@ export type ErrorRetry = { kind: "remove" | "write-file" | "link"; projectId: st
 
 export type ErrorRecord = { id: string; ts: string; where: string; message: string; debug?: string; retry?: ErrorRetry };
 
+/** A service key found in the project's own .env files (name only, never the value). */
+export type DirectKey = { file: string; name: string; service: string };
 export type FolderInspection = { exists: boolean; is_dir: boolean; git_remote?: string | null; git_branch?: string | null; nexus_project?: string | null; nexus_project_id?: string | null; nexus_environment?: string | null; nexus_connections?: { provider: string; account?: string | null; resource?: string | null; target?: string | null }[] };

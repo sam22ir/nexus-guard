@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { tierForProvider, remoteServiceUrl, remoteServiceScope, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey } from "../accounts";
 import { Button } from "@heroui/react";
@@ -14,13 +14,12 @@ type Patch = { target: string; detail: string; tone: Connection["tone"]; project
 /** Project bindings as a list plus a detail panel for the selected one.
  *  Editing is inline; saving goes through the same confirm-with-diff step the
  *  old Edit modal used (paper §8: binding edits need developer confirmation). */
-export function BindingsView({ project, projects, accounts, onAdd, onUpdate, vaultUnlocked, savedKeys, onSaveKey, onRemove, onOpenServices }: {
+export function BindingsView({ project, projects, accounts, onAdd, onUpdate, savedKeys, onSaveKey, onRemove, onOpenServices }: {
   project: Project;
   projects: Project[];
   accounts: Account[];
   onAdd: () => void;
   onUpdate: (projectId: string, connectionId: string, patch: Patch) => void;
-  vaultUnlocked: boolean;
   savedKeys: Record<string, boolean>;
   onSaveKey: (connection: Connection) => void;
   onRemove: (connection: Connection) => void;
@@ -83,7 +82,7 @@ export function BindingsView({ project, projects, accounts, onAdd, onUpdate, vau
               accounts={accounts}
               shared={sharedWith(selected)}
               entries={entries}
-              keySaved={selected.keySaved || (vaultUnlocked && savedKeys[selected.id])}
+              keySaved={selected.keySaved || savedKeys[selected.id]}
               onUpdate={onUpdate}
               onSaveKey={onSaveKey}
               onRemove={onRemove}
@@ -291,7 +290,7 @@ function BindingDetail({ project, connection, accounts, shared, entries, keySave
           {isSupabase && connection.projectRef && connection.url && (
             <div className="nx-row" style={{ borderTop: "1px solid var(--line-soft)", paddingInline: 0 }}>
               <span className="nx-tile"><NxIcon name="key" size={16} /></span>
-              <span className="nx-row-body"><span className="nx-row-title">Publishable key</span><span className="nx-row-sub">{keySaved ? "Saved in the desktop vault." : "Stays in the desktop vault. Not saved yet."}</span></span>
+              <span className="nx-row-body"><span className="nx-row-title">Publishable key</span><span className="nx-row-sub">{keySaved ? "Saved in your system keychain." : "Stays in your system keychain. Not saved yet."}</span></span>
               <Button size="sm" variant="outline" isDisabled={!desktopAvailable()} onPress={() => onSaveKey(connection)}>{!desktopAvailable() ? "Desktop only" : keySaved ? "Manage key" : "Save key"}</Button>
             </div>
           )}

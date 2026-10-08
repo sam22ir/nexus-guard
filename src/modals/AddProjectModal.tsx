@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { type FolderInspection } from "../app/types";
 import { primaryBtn, secondaryBtn, ghostLink, inputClass, selectClass } from "../app/styles";
 import { StatusDot, Note, Modal } from "../app/common";

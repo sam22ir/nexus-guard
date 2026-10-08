@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { desktopAvailable, unlockVault } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { starterProjects, type Project } from "../store";
 import { ThemeButton, nexusHttpUrlFor } from "../onboarding";
 import { agentDisplayName } from "../topology";
@@ -25,13 +25,10 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?
  *  one click, then watch the agent's first real call arrive. Linking a service
  *  is optional and comes after the proof, so the first value needs no accounts.
  *  The graph on the right gains a node per step. */
-export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlocked, onRegister, onOpenAddBinding, onOpenConnectAgent, onSkip, onFinish }: {
+export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding, onOpenConnectAgent, onSkip, onFinish }: {
   projects: Project[];
   /** A project registered earlier whose setup was skipped: the wizard reopens at the agent step. */
   resumeProject?: Project | null;
-  /** Nexus starts locked and refuses agent calls until the vault is unlocked. */
-  vaultUnlocked: boolean;
-  onVaultUnlocked: () => void;
   onRegister: (input: { name: string; path: string; repo: string; branch: string }) => string | null;
   onOpenAddBinding: (projectId: string) => void;
   onOpenConnectAgent: (projectId: string, agentId: string | null) => void;
@@ -66,9 +63,6 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
   const [baseline, setBaseline] = useState<string | null>(null);
   const [liveCall, setLiveCall] = useState<AuditEntry | null>(null);
   const [copied, setCopied] = useState(false);
-  const [password, setPassword] = useState("");
-  const [unlocking, setUnlocking] = useState(false);
-  const [unlockError, setUnlockError] = useState("");
   const [server, setServer] = useState<{ running: boolean; needs_node?: boolean; detail: string } | null>(null);
   const [starting, setStarting] = useState(false);
   const desktop = desktopAvailable();
@@ -223,21 +217,6 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
     }
   }
 
-  const locked = desktop && !vaultUnlocked;
-
-  async function unlock() {
-    setUnlocking(true); setUnlockError("");
-    try {
-      await unlockVault(password);
-      setPassword("");
-      onVaultUnlocked();
-    } catch {
-      setUnlockError("That password did not work. Check it and try again.");
-    } finally {
-      setUnlocking(false);
-    }
-  }
-
   function copyPrompt() {
     if (!navigator.clipboard?.writeText) return;
     navigator.clipboard.writeText(FIRST_PROMPT).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }).catch(() => undefined);
@@ -352,7 +331,6 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                     Wrote <span className="nx-mono">{written.path}</span>{written.diff ? ` · ${written.diff}` : ""}. {written.backup ? <>Backup at <span className="nx-mono">{written.backup}</span>.</> : "New file, so nothing to back up."}
                   </p>
                 )}
-                {connected && locked && <p className="text-[12px] leading-[1.55] text-(--muted)">Next you'll unlock Nexus, so your agent is allowed to call it.</p>}
                 {connectChecks.length > 0 && checkList(connectChecks)}
                 {project && <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, agentId)}>Prefer to run the command yourself?</button>}
               </div>
@@ -360,18 +338,6 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
 
             {step === 2 && (
               <div className="flex flex-col gap-3">
-                {locked && (
-                  <form className="flex flex-col gap-2 rounded-[12px] border border-(--line) bg-(--raised) p-3" onSubmit={(event) => { event.preventDefault(); if (password.length >= 12 && !unlocking) void unlock(); }}>
-                    <strong className="text-[13px] font-semibold text-(--text)">Unlock Nexus first</strong>
-                    <p className="text-[12px] leading-[1.55] text-(--muted)">Nexus starts locked, and a locked Nexus refuses every agent call. The first time, this creates your vault password (at least 12 characters). You enter it each time you open Nexus.</p>
-                    <label className="nx-field">
-                      Vault password
-                      <input type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} minLength={12} required placeholder="At least 12 characters" className={inputClass} />
-                    </label>
-                    {unlockError && <p className="text-[12px] text-(--red)" role="alert">{unlockError}</p>}
-                    <Button type="submit" size="sm" isDisabled={unlocking || password.length < 12} className="self-start">{unlocking ? "Unlocking…" : "Unlock Nexus"}</Button>
-                  </form>
-                )}
                 <div><h2 className="text-[16px] font-semibold text-(--text)">See your agent reach Nexus</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Restart {agent?.name ?? "your agent"} in <span className="nx-mono">{project?.path ?? "your project"}</span>, then send it this message.{agentId === "claude" && " Claude Code will ask whether to trust the “nexus” server from .mcp.json. Choose yes, or it will never connect."}{agentId === "codex" && " Codex reads .codex/config.toml in that folder, so start it there."}</p></div>
                 <div className="flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
                   <span className="min-w-0 flex-1 text-[13px] text-(--text)">{FIRST_PROMPT}</span>
@@ -382,7 +348,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                     {agentDisplayName(liveCall.agent ?? agent?.name ?? "Your agent")} called Nexus just now: <span className="nx-mono">{liveCall.operation ?? "a call"}</span> · {liveCall.decision === "allow" ? "allowed" : "refused"}.
                   </div>
                 ) : desktop ? (
-                  <p className="flex items-center gap-2 text-[12.5px] text-(--muted)" role="status"><span className="nx-check" style={{ width: 14, height: 14 }} />{locked ? "Unlock Nexus above, then send the message. Until then your agent is refused." : baseline === null ? "Getting ready…" : `Waiting for ${agent?.name ?? "your agent"}'s first call. This updates by itself.`}</p>
+                  <p className="flex items-center gap-2 text-[12.5px] text-(--muted)" role="status"><span className="nx-check" style={{ width: 14, height: 14 }} />{baseline === null ? "Getting ready…" : `Waiting for ${agent?.name ?? "your agent"}'s first call. This updates by itself.`}</p>
                 ) : (
                   <p className="text-[12px] text-(--muted)">Live detection needs the desktop app.</p>
                 )}
@@ -402,7 +368,7 @@ export function FirstRun({ projects, resumeProject, vaultUnlocked, onVaultUnlock
                     <ul className="list-disc pl-5 text-[12px] leading-[1.6] text-(--muted)">
                       <li>Start {agent?.name ?? "your agent"} again, in exactly <span className="nx-mono">{project?.path ?? "your project folder"}</span>.</li>
                       {agentId === "claude" && <li>If Claude Code asks whether to trust the “nexus” server, choose yes.</li>}
-                      {desktop && <li>Nexus must be unlocked{locked ? ": unlock it above" : " (it is)"}.</li>}
+                      {desktop && <li>Keep Nexus Guard open: its local server only runs while the app does.</li>}
                       <li>Send the message above and let the agent answer.</li>
                     </ul>
                     <div className="flex flex-wrap items-center gap-3">

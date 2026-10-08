@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { desktopAvailable } from "../vault";
+import { desktopAvailable } from "../keychain";
 import { starterAccounts, tierForProvider, accountLabelForConnection, type Account, type Connection } from "../store";
 import { Button } from "@heroui/react";
 import { Badge } from "../ui";

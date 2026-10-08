@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./vault";
+import { desktopAvailable, hasPublishableKey, listSupabaseProjects, removeMcpTokens, removePublishableKey, saveMcpTokens } from "./keychain";
 import { initialsFor, loadAccounts, loadProjects, makeAccountId, makeId, manifestAccountFor, PROVIDER_CATALOG, remoteServiceUrl, serviceSlug, setCustomServices, type CustomService, saveAccounts, saveProjects, startingAccounts, startingProjects, starterProjects, type Account, type Connection, type Project } from "./store";
 import { accountGroupKey, detectBlastRadius } from "./accounts";
 import { HomeView } from "./home";
@@ -46,7 +46,6 @@ function App() {
   const [agentTarget, setAgentTarget] = useState<{ projectId: string; agentId: string | null } | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [keyConnection, setKeyConnection] = useState<Connection | null>(null);
-  const [vaultUnlocked, setVaultUnlocked] = useState(false);
   const [savedKeys, setSavedKeys] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState("");
   const [errorLog, setErrorLog] = useState<ErrorRecord[]>(loadErrorLog);
@@ -105,14 +104,12 @@ function App() {
   }, []);
   useEffect(() => { if (project?.id) window.localStorage.setItem("nexus-guard.selected-project", project.id); }, [project]);
 
-  // Saved-key badges are verified per vault session, never trusted from
-  // storage: locking clears them, unlocking re-checks the keychain and
-  // reconciles the persisted `keySaved` flags so a key deleted outside the
-  // app stops badging as saved. Scoped to the lock/unlock transition (not
-  // the projects array) so keystroke saves don't re-hit the keychain.
-  // Note: vault.ts keeps its gate in memory, so any reload starts locked.
+  // Saved-key badges are checked against the keychain once per app start,
+  // never trusted from storage, so a key deleted outside the app stops
+  // badging as saved. Not tied to the projects array, so keystroke saves
+  // don't re-hit the keychain.
   useEffect(() => {
-    if (!vaultUnlocked) { setSavedKeys({}); return; }
+    if (!desktopAvailable()) { setSavedKeys({}); return; }
     let cancelled = false;
     const snapshot = projects;
     Promise.all(snapshot.flatMap((item) => item.connections.filter((connection) => connection.provider === "Supabase").map(async (connection) => [connection.id, await hasPublishableKey(item.id, connection.id)] as const)))
@@ -139,7 +136,7 @@ function App() {
       .catch(() => { if (!cancelled) setSavedKeys({}); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultUnlocked]);
+  }, []);
 
   function openConnectAgent(projectId: string, agentId: string | null) {
     setAgentTarget({ projectId, agentId });
@@ -285,7 +282,7 @@ function App() {
   async function removeProject(projectId: string) {
     const target = projects.find((item) => item.id === projectId);
     if (!target) return;
-    if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from this desktop vault.`)) return;
+    if (!window.confirm(`Remove project “${target.name}” from Nexus? Its ${target.connections.length} saved approval${target.connections.length === 1 ? "" : "s"} will also be deleted from your system keychain.`)) return;
     for (const connection of target.connections) {
       await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
       await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
@@ -294,7 +291,7 @@ function App() {
     const remaining = projects.filter((item) => item.id !== projectId);
     setProjects(remaining);
     if (selectedProject === projectId) setSelectedProject(remaining[0]?.id ?? "");
-    setNotice(`Project ${target.name} removed, approvals deleted from this vault. Its folders on disk are untouched.`);
+    setNotice(`Project ${target.name} removed, approvals deleted from your system keychain. Its folders on disk are untouched.`);
   }
 
   function updateConnection(projectId: string, connectionId: string, patch: { target: string; detail: string; tone: Connection["tone"]; projectRef?: string; url?: string; accountId?: string }) {
@@ -756,7 +753,7 @@ function App() {
     try {
       const filePath = await syncNexusProjectFile(owner, connectedConnection, "connected");
       const shared = sharedWith.length > 0 ? ` This Supabase account is also used by ${sharedWith.map((item) => item.name).join(", ")}, so one credential reaches all of them.` : "";
-      const suffix = ` Linked to your Supabase account “${connectedConnection.account}”. Its approval is stored in the desktop vault.${shared}`;
+      const suffix = ` Linked to your Supabase account “${connectedConnection.account}”. Its approval is stored in your system keychain.${shared}`;
       setNotice(filePath ? `Supabase is connected. Nexus wrote ${filePath}.${suffix}` : `Supabase is connected.${suffix}`);
     } catch (error) {
       reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId });
@@ -776,10 +773,10 @@ function App() {
   async function removeConnection(connection: Connection, owner?: Project, skipConfirm?: boolean) {
     const holder = owner ?? project;
     if (!holder) return;
-    if (!skipConfirm && !window.confirm(`Remove the ${connection.provider} connection “${connection.target}” from ${holder.name}? Its saved approval is deleted from this desktop vault.`)) return;
+    if (!skipConfirm && !window.confirm(`Remove the ${connection.provider} connection “${connection.target}” from ${holder.name}? Its saved approval is deleted from your system keychain.`)) return;
     const projectId = holder.id;
     setNotice("");
-    // Best-effort vault cleanup first; a missing entry is not an error.
+    // Best-effort keychain cleanup first; a missing entry is not an error.
     await removeMcpTokens(projectId, connection.id, connection.provider).catch(() => undefined);
     await invoke("set_write_grant", { projectId, connectionId: connection.id, allowed: false }).catch(() => undefined);
     await invoke("set_binding_scope", { projectId, connectionId: connection.id, value: null }).catch(() => undefined);
@@ -933,8 +930,8 @@ function App() {
 
   const railFooter = (
     <>
-      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title={vaultUnlocked ? "Settings · vault unlocked" : "Settings · vault locked"}>
-        <NxIcon name={vaultUnlocked ? "unlock" : "settings"} size={20} />
+      <button type="button" className="nx-nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title="Settings">
+        <NxIcon name="settings" size={20} />
         Settings
       </button>
       <span className="nx-user" title={osUser}>{osUser.slice(0, 1).toUpperCase()}</span>
@@ -966,7 +963,7 @@ function App() {
         banner={
           <>
             {!desktopAvailable() && (
-              <Notice tone="warning">Browser preview shows saved project details only. Connecting services, vault, activity logs, and agent detection need the desktop app.</Notice>
+              <Notice tone="warning">Browser preview shows saved project details only. Connecting services, saved approvals, activity logs, and agent detection need the desktop app.</Notice>
             )}
             {notice && <Notice tone={notice.includes("connected") ? "success" : "warning"} onDismiss={() => setNotice("")}>{notice}</Notice>}
           </>
@@ -977,7 +974,7 @@ function App() {
         <ProjectPage project={project} projects={projects} tab={projectTab} onTab={setProjectTab} onSelect={selectProject} onAdd={() => setModal("project")} onEdit={openEditProject} onRemove={(item) => void removeProject(item.id)}>
           {project && (projectTab === "status"
             ? <Overview project={project} projects={projects} accounts={accounts} onView={navigate} onAddConnection={() => setModal("connection")} onConnectAgent={() => openConnectAgent(project.id, null)} />
-            : <BindingsView project={project} projects={projects} accounts={accounts} vaultUnlocked={vaultUnlocked} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => navigate("services")} />)}
+            : <BindingsView project={project} projects={projects} accounts={accounts} savedKeys={savedKeys} onSaveKey={openKeyModal} onAdd={() => setModal("connection")} onUpdate={updateConnection} onRemove={(connection) => void removeConnection(connection)} onOpenServices={() => navigate("services")} />)}
         </ProjectPage>
       )}
       {view === "connections" && (
@@ -989,8 +986,8 @@ function App() {
       )}
       {GUARD_VISIBLE && view === "guard" && <GuardView projects={projects} onSetOverride={setConnectionOverride} />}
       {view === "activity" && <ActivityView projects={projects} errorLog={errorLog} onClearErrors={() => setErrorLog([])} onRetryError={(record) => void retryError(record)} />}
-      {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onLocked={() => setVaultUnlocked(false)} onReset={() => {
-        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log are cleared. Vault approvals in the OS keychain are untouched.")) return;
+      {view === "settings" && <SettingsView projects={projects} savedKeys={savedKeys} onReset={() => {
+        if (!window.confirm("Reset all local Nexus data? Projects, setup, and the error log are cleared. Approvals in the OS keychain are untouched.")) return;
         try {
           window.localStorage.removeItem("nexus-guard.projects");
           window.localStorage.removeItem("nexus-guard.accounts");
@@ -1009,8 +1006,6 @@ function App() {
       {onboardingOpen && (
         <FirstRun
           resumeProject={resumeProject}
-          vaultUnlocked={vaultUnlocked}
-          onVaultUnlocked={() => setVaultUnlocked(true)}
           projects={projects}
           onRegister={(input) => addProject(input, { stay: true })}
           onOpenAddBinding={(projectId) => { setSelectedProject(projectId); setModal("connection"); }}
@@ -1023,7 +1018,7 @@ function App() {
       {modal === "edit-project" && editingProject && <EditProjectModal project={editingProject} onClose={() => setModal(null)} onSave={(patch) => updateProject(editingProject.id, patch)} existingNames={projects.filter((item) => item.id !== editingProject.id).map((item) => item.name)} />}
       {modal === "agent" && agentTarget && projects.some((item) => item.id === agentTarget.projectId) && <ConnectAgentModal project={projects.find((item) => item.id === agentTarget.projectId)!} initialAgentId={agentTarget.agentId} onClose={() => setModal(null)} />}
       {modal === "connection" && project && <AddConnectionModal initialProvider={linkPrefill?.provider} initialAccountId={linkPrefill?.accountId} projectId={project.id} projectName={project.name} environment={project.environment} projects={projects} accounts={accounts} onCreateAccount={createAccount} customNames={customServices.map((entry) => entry.name)} github={{ ...githubStatus, start: githubStart, wait: githubWait, repos: githubRepos, confirm: githubConfirm }} remote={{ available: desktopAvailable(), connect: connectRemoteService }} onClose={() => { setModal(null); setLinkPrefill(null); }} onSave={addConnection} onAuthorizeMcp={authorizeMcpConnection} onConfirmMcp={(ownerProjectId, connectionId, choice) => void confirmMcpConnection(ownerProjectId, connectionId, choice).catch((error) => setNotice(reportError("Linking Supabase project", error, { kind: "link", projectId: ownerProjectId, connectionId })))} onCancelMcp={(ownerProjectId, connectionId) => void cancelMcpConnection(ownerProjectId, connectionId)} onAbortMcp={abortMcpAuthorize} />}
-      {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} vaultUnlocked={vaultUnlocked} onUnlocked={() => setVaultUnlocked(true)} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
+      {modal === "key" && project && keyConnection && <PublishableKeyModal project={project} connection={keyConnection} saved={!!savedKeys[keyConnection.id]} onClose={() => setModal(null)} onChanged={(saved) => { setSavedKeys((current) => ({ ...current, [keyConnection.id]: saved })); setProjects((current) => current.map((item) => item.id === project.id ? { ...item, connections: item.connections.map((itemConnection) => itemConnection.id === keyConnection.id ? { ...itemConnection, keySaved: saved } : itemConnection) } : item)); setModal(null); }} />}
     </>
   );
 }
