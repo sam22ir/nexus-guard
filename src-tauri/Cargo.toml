@@ -1,7 +1,7 @@
 [package]
 name = "nexus-guard"
 default-run = "nexus-guard"
-version = "0.1.1"
+version = "0.1.2"
 description = "Project-aware service connections for coding agents"
 authors = ["you"]
 edition = "2021"
@@ -30,6 +30,11 @@ sha2 = "0.11.0"
 rand = "0.10.3"
 url = "2.5.8"
 keyring = "4.2.0"
+
+# Automatic updates (desktop only; mobile targets are not built).
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
