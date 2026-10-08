@@ -17,7 +17,10 @@ if (!existsSync(binary) || statSync(binary).size === 0) {
 }
 
 const port = 39391;
-const child = spawn(binary, [], { env: { ...process.env, NEXUS_HTTP_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+// NEXUS_SMOKE_UNDER_ARCH=x86_64 runs the executable through `arch -x86_64` (Rosetta on Apple Silicon).
+const underArch = process.env.NEXUS_SMOKE_UNDER_ARCH;
+const [command, commandArgs] = underArch ? ["arch", [`-${underArch}`, binary]] : [binary, []];
+const child = spawn(command, commandArgs, { env: { ...process.env, NEXUS_HTTP_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 let output = "";
 child.stdout.on("data", (chunk) => { output += chunk; });
 child.stderr.on("data", (chunk) => { output += chunk; });

@@ -57,6 +57,7 @@ jobs:
       - run: npm run test:mcp
 
       - uses: tauri-apps/tauri-action@v0
+        id: build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the updater files (.sig, latest.json). Required: with createUpdaterArtifacts on, the build fails without them.
@@ -75,3 +76,84 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      # Test the installers that were just built, the way users install them.
+      # These steps run AFTER tauri-action has created the DRAFT release. If any of
+      # them fails, this job fails and the draft must not be published.
+      - name: Test the Linux .deb
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(src-tauri/target/release/bundle/deb/*.deb)
+          if [ ${#debs[@]} -ne 1 ]; then echo "Expected one .deb, found ${#debs[@]}."; exit 1; fi
+          rm -rf "$RUNNER_TEMP/pkg"
+          dpkg -x "${debs[0]}" "$RUNNER_TEMP/pkg"
+          # Tauri installs external binaries into /usr/bin inside the .deb.
+          server=$(find "$RUNNER_TEMP/pkg" -type f -name nexus-server -path '*/usr/bin/*')
+          keyring=$(find "$RUNNER_TEMP/pkg" -type f -name nexus-keyring -path '*/usr/bin/*')
+          if [ -z "$server" ] || [ -z "$keyring" ]; then
+            echo "The .deb does not contain nexus-server and nexus-keyring under usr/bin. Files:"
+            find "$RUNNER_TEMP/pkg" -type f
+            exit 1
+          fi
+          echo "Packaged server: $server"
+          echo "Packaged keyring: $keyring"
+          node scripts/smoke-installer.mjs "$server" "$keyring"
+
+      - name: Test the macOS .dmg
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          triple=$(echo "${{ matrix.args }}" | sed -E 's/.*--target ([^ ]+).*/\1/')
+          dmgs=(src-tauri/target/$triple/release/bundle/dmg/*.dmg)
+          if [ ${#dmgs[@]} -ne 1 ]; then echo "Expected one .dmg for $triple, found ${#dmgs[@]}."; exit 1; fi
+          mnt="$RUNNER_TEMP/dmg"
+          mkdir -p "$mnt"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "${dmgs[0]}"
+          trap 'hdiutil detach "$mnt" -quiet || true' EXIT
+          rm -rf "$RUNNER_TEMP/app"
+          mkdir -p "$RUNNER_TEMP/app"
+          cp -R "$mnt/Nexus Guard.app" "$RUNNER_TEMP/app/"
+          hdiutil detach "$mnt" -quiet
+          trap - EXIT
+          macos="$RUNNER_TEMP/app/Nexus Guard.app/Contents/MacOS"
+          ls -l "$macos"
+          server="$macos/nexus-server"
+          keyring="$macos/nexus-keyring"
+          if [ "$triple" = "aarch64-apple-darwin" ]; then
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch arm64
+          elif arch -x86_64 /usr/bin/true 2>/dev/null; then
+            # Intel build on an Apple Silicon runner: run it under Rosetta.
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch x86_64 --run-under x86_64
+          else
+            echo "::notice::Rosetta is not installed on this runner, so the Intel build is only checked for its files and architecture."
+            node scripts/smoke-installer.mjs "$server" "$keyring" --expect-arch x86_64 --files-only
+          fi
+
+      - name: Test the Windows setup.exe
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if ($setup.Count -ne 1) { throw "Expected one setup.exe, found $($setup.Count)." }
+          # The NSIS installer installs per user; /S is its silent mode.
+          $install = Start-Process -Wait -PassThru -FilePath $setup[0].FullName -ArgumentList '/S'
+          if ($install.ExitCode -ne 0) { throw "The silent install exited with $($install.ExitCode)." }
+          $server = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Nexus Guard\nexus-server.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Nexus Guard\nexus-server.exe')
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $server) {
+            # Not where expected: search the per-user app data for it.
+            $server = (Get-ChildItem $env:LOCALAPPDATA -Filter nexus-server.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if (-not $server) { throw "nexus-server.exe was not found under $env:LOCALAPPDATA after the install." }
+          $keyring = Join-Path (Split-Path $server) 'nexus-keyring.exe'
+          Write-Host "Installed server: $server"
+          node scripts/smoke-installer.mjs $server $keyring
+          if ($LASTEXITCODE -ne 0) { throw "The installer smoke test failed ($LASTEXITCODE)." }
