@@ -1,14 +1,14 @@
 {
   "status": "available",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "date": "2026-10-08",
-  "notes": "https://github.com/sam22ir/nexus-guard/releases/tag/v0.1.1",
+  "notes": "https://github.com/sam22ir/nexus-guard/releases/tag/v0.1.2",
   "downloads": [
-    { "os": "macos", "label": "macOS (Apple Silicon)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard_0.1.1_aarch64.dmg" },
-    { "os": "macos", "label": "macOS (Intel)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard_0.1.1_x64.dmg" },
-    { "os": "windows", "label": "Windows", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard_0.1.1_x64-setup.exe" },
-    { "os": "linux", "label": "Linux (.deb)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard_0.1.1_amd64.deb" },
-    { "os": "linux", "label": "Linux (.AppImage)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard_0.1.1_amd64.AppImage" },
-    { "os": "linux", "label": "Linux (.rpm)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.1/Nexus.Guard-0.1.1-1.x86_64.rpm" }
+    { "os": "macos", "label": "macOS (Apple Silicon)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard_0.1.2_aarch64.dmg" },
+    { "os": "macos", "label": "macOS (Intel)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard_0.1.2_x64.dmg" },
+    { "os": "windows", "label": "Windows", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard_0.1.2_x64-setup.exe" },
+    { "os": "linux", "label": "Linux (.deb)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard_0.1.2_amd64.deb" },
+    { "os": "linux", "label": "Linux (.AppImage)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard_0.1.2_amd64.AppImage" },
+    { "os": "linux", "label": "Linux (.rpm)", "url": "https://github.com/sam22ir/nexus-guard/releases/download/v0.1.2/Nexus.Guard-0.1.2-1.x86_64.rpm" }
   ]
 }
