@@ -34,7 +34,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 25.5+ is needed to build the standalone server (Node SEA with an ES module).
+          node-version: 26
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
