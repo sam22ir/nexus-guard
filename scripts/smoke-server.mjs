@@ -28,7 +28,11 @@ let exited = null;
 child.on("exit", (code) => { exited = code; });
 
 const stop = (code) => { child.kill(); process.exit(code); };
-for (let i = 0; i < 40; i += 1) {
+// Rosetta translates a large program on its first launch, which can take
+// well over 20 seconds, so a run under another architecture waits longer.
+const seconds = Number(process.env.NEXUS_SMOKE_TIMEOUT_S) || (underArch ? 120 : 20);
+const started = Date.now();
+for (let i = 0; i < seconds * 2; i += 1) {
   if (exited !== null) {
     console.error(`The server exited (${exited}) before answering:\n${output}`);
     process.exit(1);
@@ -37,7 +41,7 @@ for (let i = 0; i < 40; i += 1) {
     const res = await fetch(`http://127.0.0.1:${port}/healthz`);
     const body = await res.json();
     if (res.status === 200 && body.ok === true) {
-      console.log(`OK: ${path.basename(binary)} (${Math.round(statSync(binary).size / 1e6)} MB) answers /healthz.`);
+      console.log(`OK: ${path.basename(binary)} (${Math.round(statSync(binary).size / 1e6)} MB) answers /healthz after ${Math.round((Date.now() - started) / 1000)} s.`);
       stop(0);
     }
   } catch {
@@ -45,5 +49,5 @@ for (let i = 0; i < 40; i += 1) {
   }
   await new Promise((resolve) => setTimeout(resolve, 500));
 }
-console.error(`The server did not answer within 20 seconds:\n${output}`);
+console.error(`The server did not answer within ${seconds} seconds:\n${output || "(no output)"}`);
 stop(1);
