@@ -14,6 +14,10 @@ const real = (file) => {
 };
 
 export function isEntryFile(metaUrl, argv1 = process.argv[1]) {
+  // The bundled server is always its own entry. The desktop app starts the packaged
+  // executable with no script argument (a Single Executable Application has no
+  // script path, so argv[1] does not name the file), so the path check cannot match.
+  if (globalThis.__NEXUS_BUNDLED) return true;
   if (!argv1) return false;
   return real(fileURLToPath(metaUrl)) === real(argv1);
 }

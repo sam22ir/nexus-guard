@@ -14,7 +14,9 @@ unmanaged, not protected — direct provider CLI/MCP/browser use bypasses Nexus.
 
 ## Quick start
 
-You need **Node.js 20 or newer** and one coding agent (Claude Code, Codex or OpenCode). The desktop app runs a small local server with your Node, and shows a "Get Node.js" prompt if it is missing or too old.
+You need one coding agent (Claude Code, Codex or OpenCode). The installed desktop app ships its local server as a standalone program, so **you do not need Node.js installed** to use it.
+
+Building an installer from source needs **Node.js 25.5 or newer** (the build packs the server into a Node executable). `npm run tauri dev` also works with Node.js 20 or newer; the app then runs the server with your Node and shows a "Get Node.js" prompt if it is missing or too old.
 
 **Installer:** download the build for your system from the project's GitHub Releases. Builds are unsigned for now, so your OS will ask you to confirm opening it:
 

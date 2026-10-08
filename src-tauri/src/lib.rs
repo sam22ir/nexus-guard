@@ -1645,6 +1645,16 @@ fn bundled_keyring_binary() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+/// The server as a standalone executable (a Node Single Executable Application),
+/// shipped next to the app like the keyring helper. An empty file is the build
+/// placeholder, so it is not used and the app runs the server with Node instead.
+fn bundled_server_binary() -> Option<PathBuf> {
+    let dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidate = dir.join(if cfg!(windows) { "nexus-server.exe" } else { "nexus-server" });
+    let metadata = fs::metadata(&candidate).ok()?;
+    (metadata.is_file() && metadata.len() > 0).then_some(candidate)
+}
+
 /// Write the agent's project MCP config so that agent routes through Nexus.
 /// Paper: single HTTP instance, no per-agent stdio. This writes ONE
 /// canonical HTTP entry named `nexus`, bound to this project's workspace by
@@ -2435,7 +2445,8 @@ struct NexusServer(Mutex<Option<std::process::Child>>);
 #[derive(Serialize)]
 struct NexusServerStatus {
     running: bool,
-    /// True when the fix is installing Node.js (missing or older than 20).
+    /// True when the fix is installing Node.js (missing or older than 20). Only a
+    /// source checkout runs the server with Node; the packaged app never sets it.
     needs_node: bool,
     started_by_app: bool,
     url: String,
@@ -2477,17 +2488,26 @@ fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
     if probe_http_agent(&url) {
         return NexusServerStatus { running: true, needs_node: false, started_by_app, url, detail: "Nexus is running.".to_string() };
     }
-    let script = match nexus_server_script(app.path().resource_dir().ok()) {
-        Some(script) => script,
-        None => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not find its server files. Reinstall the app, or run `node mcp/nexus-http-server.mjs` from the project.".to_string() },
+    // The packaged app runs its own server executable and needs no Node.js. A
+    // source checkout (no executable next to the app) runs the script with Node.
+    let (mut command, spawn_failure) = match bundled_server_binary() {
+        Some(binary) => (background_command(binary), "Nexus could not start its local server. Reinstall the app, then reopen Nexus."),
+        None => {
+            let script = match nexus_server_script(app.path().resource_dir().ok()) {
+                Some(script) => script,
+                None => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not find its server files. Reinstall the app, or run `node mcp/nexus-http-server.mjs` from the project.".to_string() },
+            };
+            let node = find_node_binary();
+            match node_major_version(&node) {
+                None => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer to run its local server, and none was found. Install it from nodejs.org, then reopen Nexus.") },
+                Some(major) if major < MIN_NODE_MAJOR => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer, but found version {major}. Update it from nodejs.org, then reopen Nexus.") },
+                Some(_) => {}
+            }
+            let mut command = background_command(&node);
+            command.arg(&script);
+            (command, "Nexus could not start its local server. Check that Node.js runs from a terminal, then reopen Nexus.")
+        }
     };
-    let node = find_node_binary();
-    match node_major_version(&node) {
-        None => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer to run its local server, and none was found. Install it from nodejs.org, then reopen Nexus.") },
-        Some(major) if major < MIN_NODE_MAJOR => return NexusServerStatus { running: false, needs_node: true, started_by_app: false, url, detail: format!("Nexus needs Node.js {MIN_NODE_MAJOR} or newer, but found version {major}. Update it from nodejs.org, then reopen Nexus.") },
-        Some(_) => {}
-    }
-    let mut command = background_command(&node);
     // Hand the server the exact folders this app uses, so the two never disagree.
     command.env("NEXUS_CONFIG_DIR", nexus_config_dir());
     if env::var_os("NEXUS_KEYRING_BIN").is_none() {
@@ -2496,14 +2516,13 @@ fn ensure_nexus_server_running(app: &tauri::AppHandle) -> NexusServerStatus {
         }
     }
     let child = command
-        .arg(&script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
     match child {
         Ok(child) => *slot = Some(child),
-        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: "Nexus could not start its local server. Check that Node.js runs from a terminal, then reopen Nexus.".to_string() },
+        Err(_) => return NexusServerStatus { running: false, needs_node: false, started_by_app: false, url, detail: spawn_failure.to_string() },
     }
     drop(slot);
     for _ in 0..30 {

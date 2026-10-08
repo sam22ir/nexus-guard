@@ -37,7 +37,8 @@
       "resources/mcp/nexus-http-server.mjs": "mcp/nexus-http-server.mjs"
     },
     "externalBin": [
-      "binaries/nexus-keyring"
+      "binaries/nexus-keyring",
+      "binaries/nexus-server"
     ]
   }
 }
