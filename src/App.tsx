@@ -15,6 +15,7 @@ import { Button } from "@heroui/react";
 import { AppShell, Badge, Icon as NxIcon, Notice, type NavItem } from "./ui";
 import { type View, type NavTarget, type ProjectTab, type ConnectionsTab, type ErrorRetry, type ErrorRecord } from "./app/types";
 import { GUARD_VISIBLE } from "./app/styles";
+import { UpdateNotice } from "./app/UpdateNotice";
 import { errorIdentity, loadErrorLog } from "./app/errors";
 import { Overview } from "./views/OverviewView";
 import { AgentsView } from "./views/AgentsView";
@@ -966,6 +967,7 @@ function App() {
               <Notice tone="warning">Browser preview shows saved project details only. Connecting services, saved approvals, activity logs, and agent detection need the desktop app.</Notice>
             )}
             {notice && <Notice tone={notice.includes("connected") ? "success" : "warning"} onDismiss={() => setNotice("")}>{notice}</Notice>}
+            <UpdateNotice />
           </>
         }
       >

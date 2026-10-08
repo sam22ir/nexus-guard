@@ -31,6 +31,11 @@ rand = "0.10.3"
 url = "2.5.8"
 keyring = "4.2.0"
 
+# Automatic updates (desktop only; mobile targets are not built).
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
