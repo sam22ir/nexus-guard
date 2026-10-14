@@ -967,6 +967,43 @@ fn probe_http_agent(url: &str) -> bool {
     }
 }
 
+/// True when `url` is exactly the bare Nexus URL: loopback host, the Nexus
+/// port, path `/mcp`, no query and no fragment (so no `workspace=`).
+fn is_bare_nexus_url(url: &str, port: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return false;
+    };
+    let loopback = matches!(parsed.host_str(), Some("127.0.0.1") | Some("localhost") | Some("[::1]"));
+    let same_port = parsed.port().map(|value| value.to_string()).as_deref() == Some(port);
+    parsed.scheme() == "http"
+        && loopback
+        && same_port
+        && parsed.path().trim_end_matches('/') == "/mcp"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+}
+
+/// A raw config entry (JSON or TOML body) whose only Nexus URL is bare.
+fn is_bare_nexus_entry(raw: &str, port: &str) -> bool {
+    let mut found = false;
+    for (index, _) in raw.match_indices("http") {
+        let rest = &raw[index..];
+        if !(rest.starts_with("http://") || rest.starts_with("https://")) {
+            continue;
+        }
+        let end = rest
+            .find(|c: char| c == '"' || c == '\'' || c.is_whitespace() || c == ',')
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        if is_bare_nexus_url(candidate, port) {
+            found = true;
+        } else if candidate.contains("127.0.0.1") || candidate.contains("localhost") {
+            return false;
+        }
+    }
+    found
+}
+
 /// Paper classification: an entry counts as Nexus-managed only when it is an
 /// HTTP URL on the Nexus port AND bound to a workspace (URL `workspace=`
 /// query or the `X-Nexus-Workspace` header). A stale stdio entry that runs
@@ -990,6 +1027,11 @@ fn entry_is_nexus_managed(name: &str, raw: &str, port: &str) -> bool {
         || lowered.contains(&format!("localhost:{port}"));
     if !on_nexus_port {
         return false;
+    }
+    // Global mode: the bare Nexus URL (no workspace) is Nexus-managed. The
+    // server binds the project from the agent's roots.
+    if is_bare_nexus_entry(raw, port) {
+        return true;
     }
     let bound = lowered.contains("workspace=")
         || lowered.contains("x-nexus-workspace");
@@ -1050,10 +1092,22 @@ fn scan_global_json_mcp(relative: &str, nested: bool, port: &str) -> Vec<Unmanag
             .get("mcpServers")
             .and_then(|servers| servers.as_object())
     };
-    match servers {
+    let mut out = match servers {
         Some(servers) => unmanaged_in_json_servers(&format!("~/{relative}"), servers, port),
         None => Vec::new(),
+    };
+    if nested {
+        // OpenCode's documented shape: entries sit directly under `mcp`.
+        if let Some(mcp) = document.get("mcp").and_then(|mcp| mcp.as_object()) {
+            let direct: serde_json::Map<String, serde_json::Value> = mcp
+                .iter()
+                .filter(|(name, value)| name.as_str() != "servers" && value.is_object())
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            out.extend(unmanaged_in_json_servers(&format!("~/{relative}"), &direct, port));
+        }
     }
+    out
 }
 
 /// Block-based Codex classifier shared by the global and project scans.
@@ -2340,14 +2394,370 @@ fn test_agent_setup(
         None => {
             // Manual agents: readiness only, no known file to check.
         }
-        Some(config_path) => match fs::read_to_string(&config_path) {
-            Ok(raw) if raw.contains("nexus") && raw.contains("workspace=") => steps.push(AgentSetupTest { step: "Agent config".to_string(), ok: true, detail: format!("{} points at Nexus over HTTP.", config_path.file_name().and_then(|name| name.to_str()).unwrap_or("config")) }),
-            Ok(raw) if raw.contains("nexus") => steps.push(AgentSetupTest { step: "Agent config".to_string(), ok: false, detail: "The agent config has a Nexus entry but it is not workspace-bound HTTP. Re-run connect.".to_string() }),
-            Ok(_) => steps.push(AgentSetupTest { step: "Agent config".to_string(), ok: false, detail: "The agent config exists but has no Nexus entry.".to_string() }),
-            Err(_) => steps.push(AgentSetupTest { step: "Agent config".to_string(), ok: false, detail: "No agent config written yet. Write it first.".to_string() }),
-        },
+        Some(config_path) => steps.push(agent_config_step(&config_path, || {
+            global_agent_status_for(&agent_id)
+                .map(|status| status.connected)
+                .unwrap_or(false)
+        })),
     }
     Ok(steps)
+}
+
+/// The "Agent config" step. The project file wins when it has a Nexus entry;
+/// when it has none, a global (all projects) entry for the agent also passes.
+fn agent_config_step(
+    config_path: &std::path::Path,
+    mut global_connected: impl FnMut() -> bool,
+) -> AgentSetupTest {
+    let step = "Agent config".to_string();
+    let file_name = config_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config")
+        .to_string();
+    let global_ok = |detail: &str| AgentSetupTest { step: step.clone(), ok: true, detail: detail.to_string() };
+    match fs::read_to_string(config_path) {
+        Ok(raw) if raw.contains("nexus") && raw.contains("workspace=") => AgentSetupTest {
+            step,
+            ok: true,
+            detail: format!("{file_name} points at Nexus over HTTP."),
+        },
+        Ok(raw) if raw.contains("nexus") => AgentSetupTest {
+            step,
+            ok: false,
+            detail: "The agent config has a Nexus entry but it is not workspace-bound HTTP. Re-run connect.".to_string(),
+        },
+        Ok(_) if global_connected() => global_ok("Connected for all projects"),
+        Ok(_) => AgentSetupTest {
+            step,
+            ok: false,
+            detail: "The agent config exists but has no Nexus entry.".to_string(),
+        },
+        Err(_) if global_connected() => global_ok("Connected for all projects"),
+        Err(_) => AgentSetupTest {
+            step,
+            ok: false,
+            detail: "No agent config written yet. Write it first.".to_string(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Global mode: one user-level `nexus` entry with the bare URL (no workspace).
+// The server binds the project from the agent's MCP roots.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Clone)]
+struct GlobalAgentStatus {
+    agent_id: String,
+    installed: bool,
+    connected: bool,
+    config_path: String,
+    detail: String,
+}
+
+/// Where user-level agent configs live; injectable so tests use a temp HOME.
+struct GlobalEnv {
+    home: PathBuf,
+    xdg_config_home: Option<PathBuf>,
+}
+
+impl GlobalEnv {
+    fn from_env() -> Option<GlobalEnv> {
+        let home = home_dir()?;
+        let xdg_config_home = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|value| value.is_absolute());
+        Some(GlobalEnv { home, xdg_config_home })
+    }
+
+    fn opencode_dir(&self) -> PathBuf {
+        self.xdg_config_home
+            .clone()
+            .unwrap_or_else(|| self.home.join(".config"))
+            .join("opencode")
+    }
+
+    fn opencode_config(&self) -> PathBuf {
+        self.opencode_dir().join("opencode.json")
+    }
+
+    fn claude_config(&self) -> PathBuf {
+        self.home.join(".claude.json")
+    }
+}
+
+const GLOBAL_AGENT_IDS: [&str; 2] = ["claude", "opencode"];
+
+/// Validate the Nexus URL for a global entry and strip anything that could
+/// bind it to one project: the result never has a query or fragment.
+fn bare_global_url(http_url: Option<String>) -> Result<String, String> {
+    let raw = http_url
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(default_nexus_http_url);
+    if !raw.starts_with("http://") && !raw.starts_with("https://") {
+        return Err("That Nexus URL is invalid. Use an http:// or https:// address.".to_string());
+    }
+    let mut parsed = url::Url::parse(&raw)
+        .map_err(|_| "That Nexus URL is invalid. Use an http:// or https:// address.".to_string())?;
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let bare = parsed.to_string();
+    if bare.contains("workspace=") {
+        return Err("That Nexus URL is invalid. A global entry cannot name a project.".to_string());
+    }
+    Ok(bare)
+}
+
+fn claude_mcp_add_args(url: &str) -> Vec<String> {
+    ["mcp", "add", "--scope", "user", "--transport", "http", "nexus", url]
+        .iter()
+        .map(|part| part.to_string())
+        .collect()
+}
+
+fn claude_mcp_remove_args() -> Vec<String> {
+    ["mcp", "remove", "nexus", "--scope", "user"]
+        .iter()
+        .map(|part| part.to_string())
+        .collect()
+}
+
+/// Read-only: the URL of the user-level `nexus` entry in ~/.claude.json.
+fn claude_global_entry_url(env: &GlobalEnv) -> Option<String> {
+    let raw = fs::read_to_string(env.claude_config()).ok()?;
+    let document: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    document
+        .get("mcpServers")?
+        .get("nexus")?
+        .get("url")?
+        .as_str()
+        .map(|url| url.to_string())
+}
+
+/// The URL of the user-level `nexus` entry in OpenCode's config. Documented
+/// shape is `mcp.nexus`; the legacy `mcp.servers.nexus` written by older
+/// project writes is also recognised when reading.
+fn opencode_entry_url_in(document: &serde_json::Value) -> Option<String> {
+    let mcp = document.get("mcp")?;
+    let direct = mcp.get("nexus").and_then(|entry| entry.get("url"));
+    let legacy = mcp
+        .get("servers")
+        .and_then(|servers| servers.get("nexus"))
+        .and_then(|entry| entry.get("url"));
+    direct.or(legacy)?.as_str().map(|url| url.to_string())
+}
+
+fn opencode_global_entry_url(path: &std::path::Path) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let document: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    opencode_entry_url_in(&document)
+}
+
+fn read_opencode_document(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let document: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+                "The OpenCode config is not valid JSON. Fix the file and try again; Nexus did not change it.".to_string()
+            })?;
+            if !document.is_object() {
+                return Err("The OpenCode config is not valid JSON. Fix the file and try again; Nexus did not change it.".to_string());
+            }
+            Ok(document)
+        }
+        Err(_) if !path.exists() => Ok(serde_json::json!({})),
+        Err(_) => Err("Nexus could not read the OpenCode config. Check the file is readable and try again.".to_string()),
+    }
+}
+
+fn save_opencode_document(path: &std::path::Path, document: &serde_json::Value) -> Result<String, String> {
+    let output = serde_json::to_string_pretty(document)
+        .map_err(|_| "Nexus could not save the agent config. Check the folder is writable and try again.".to_string())?
+        + "\n";
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|_| "Nexus could not create the agent config folder. Check the folder is writable and try again.".to_string())?;
+    }
+    let backup = backup_config_file(path)?;
+    write_text_file_atomic(path, &output)?;
+    Ok(backup)
+}
+
+/// Write `mcp.nexus = {type: remote, url}` in the OpenCode user config,
+/// keeping every other key. Returns the backup path ("" if none/no change).
+fn opencode_connect_at(path: &std::path::Path, url: &str) -> Result<String, String> {
+    let mut document = read_opencode_document(path)?;
+    let root = document.as_object_mut().ok_or_else(|| "The OpenCode config is damaged.".to_string())?;
+    let mcp = root.entry("mcp").or_insert_with(|| serde_json::json!({}));
+    let mcp = mcp.as_object_mut().ok_or_else(|| {
+        "The OpenCode config has an unexpected \"mcp\" section. Fix the file and try again; Nexus did not change it.".to_string()
+    })?;
+    let wanted = serde_json::json!({ "type": "remote", "url": url });
+    if mcp.get("nexus") == Some(&wanted) {
+        return Ok(String::new());
+    }
+    mcp.insert("nexus".to_string(), wanted);
+    save_opencode_document(path, &document)
+}
+
+/// Remove only the `nexus` key from `mcp`. Absent file/key is Ok and writes nothing.
+fn opencode_remove_at(path: &std::path::Path) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let mut document = read_opencode_document(path)?;
+    let removed = document
+        .get_mut("mcp")
+        .and_then(|mcp| mcp.as_object_mut())
+        .map(|mcp| mcp.remove("nexus").is_some())
+        .unwrap_or(false);
+    if !removed {
+        return Ok(String::new());
+    }
+    save_opencode_document(path, &document)
+}
+
+/// Full path of an executable on PATH (PATHEXT-aware on Windows).
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    let extensions: Vec<String> = if cfg!(windows) {
+        env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .filter(|ext| !ext.is_empty())
+            .map(|ext| ext.to_ascii_lowercase())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for dir in env::split_paths(&path_var) {
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        for ext in &extensions {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn global_status_in(agent_id: &str, env: &GlobalEnv, port: &str, binary_found: bool) -> Result<GlobalAgentStatus, String> {
+    let (installed, url, config_path) = match agent_id {
+        "claude" => (
+            binary_found || env.claude_config().exists() || env.home.join(".claude").exists(),
+            claude_global_entry_url(env),
+            env.claude_config(),
+        ),
+        "opencode" => (
+            binary_found || env.opencode_dir().exists(),
+            opencode_global_entry_url(&env.opencode_config()),
+            env.opencode_config(),
+        ),
+        _ => return Err("Global mode supports Claude Code and OpenCode.".to_string()),
+    };
+    let connected = url.as_deref().map(|url| is_bare_nexus_url(url, port)).unwrap_or(false);
+    let detail = if connected {
+        "Connected for all projects".to_string()
+    } else if url.is_some() {
+        "A Nexus entry exists but does not use the all-projects URL.".to_string()
+    } else if installed {
+        "Not connected for all projects yet.".to_string()
+    } else {
+        "Not detected on this machine.".to_string()
+    };
+    Ok(GlobalAgentStatus {
+        agent_id: agent_id.to_string(),
+        installed,
+        connected,
+        config_path: config_path.to_string_lossy().into_owned(),
+        detail,
+    })
+}
+
+fn global_agent_status_for(agent_id: &str) -> Result<GlobalAgentStatus, String> {
+    let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
+    let port = nexus_http_port(&default_nexus_http_url());
+    global_status_in(agent_id, &env, &port, executable_in_path(agent_id))
+}
+
+/// Global-mode status for the agents that declare MCP roots.
+#[tauri::command]
+fn global_agent_status() -> Vec<GlobalAgentStatus> {
+    GLOBAL_AGENT_IDS
+        .iter()
+        .filter_map(|id| global_agent_status_for(id).ok())
+        .collect()
+}
+
+fn run_claude(binary: &std::path::Path, args: &[String]) -> Result<(), String> {
+    let output = background_command(binary)
+        .args(args)
+        .output()
+        .map_err(|_| "Nexus could not run Claude Code. Check that `claude` works in a terminal and try again.".to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("Claude Code refused the change. Run `claude mcp list` in a terminal to see why.".to_string())
+    }
+}
+
+#[tauri::command]
+fn connect_agent_globally(agent_id: String, http_url: Option<String>) -> Result<GlobalAgentStatus, String> {
+    let url = bare_global_url(http_url)?;
+    let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
+    let port = nexus_http_port(&url);
+    match agent_id.as_str() {
+        "claude" => {
+            let binary = find_executable("claude").ok_or_else(|| {
+                "Claude Code was not found on this machine. Install it, or connect each project instead.".to_string()
+            })?;
+            let existing = claude_global_entry_url(&env);
+            if existing.as_deref() != Some(url.as_str()) {
+                if existing.is_some() {
+                    run_claude(&binary, &claude_mcp_remove_args())?;
+                }
+                run_claude(&binary, &claude_mcp_add_args(&url))?;
+            }
+            global_status_in("claude", &env, &port, true)
+        }
+        "opencode" => {
+            opencode_connect_at(&env.opencode_config(), &url)?;
+            global_status_in("opencode", &env, &port, executable_in_path("opencode"))
+        }
+        _ => Err("Global mode supports Claude Code and OpenCode.".to_string()),
+    }
+}
+
+#[tauri::command]
+fn remove_global_agent_entry(agent_id: String) -> Result<GlobalAgentStatus, String> {
+    let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
+    let port = nexus_http_port(&default_nexus_http_url());
+    match agent_id.as_str() {
+        "claude" => {
+            let binary = find_executable("claude");
+            if claude_global_entry_url(&env).is_some() {
+                let binary = binary.clone().ok_or_else(|| {
+                    "Claude Code was not found on this machine. Remove the nexus entry with `claude mcp remove nexus --scope user`.".to_string()
+                })?;
+                if let Err(error) = run_claude(&binary, &claude_mcp_remove_args()) {
+                    if claude_global_entry_url(&env).is_some() {
+                        return Err(error);
+                    }
+                }
+            }
+            global_status_in("claude", &env, &port, binary.is_some())
+        }
+        "opencode" => {
+            opencode_remove_at(&env.opencode_config())?;
+            global_status_in("opencode", &env, &port, executable_in_path("opencode"))
+        }
+        _ => Err("Global mode supports Claude Code and OpenCode.".to_string()),
+    }
 }
 
 /// Absolute node binary for MCP configs. GUI-launched agents rarely inherit
@@ -3125,6 +3535,9 @@ pub fn run() {
             import_agent_entry,
             remove_agent_entry,
             test_agent_setup,
+            global_agent_status,
+            connect_agent_globally,
+            remove_global_agent_entry,
             node_binary_path,
             ensure_nexus_server,
             github_status,
@@ -4007,11 +4420,17 @@ mod agent_setup_tests {
             r#"{"command":"node"}"#,
             "3939"
         ), "bare nexus name without a URL is not managed");
-        assert!(!entry_is_nexus_managed(
-            "nexus-http",
-            r#"{"type":"remote","url":"http://localhost:3939/mcp"}"#,
+        // Global mode: the bare Nexus URL is managed (roots bind the project).
+        assert!(entry_is_nexus_managed(
+            "nexus",
+            r#"{"type":"http","url":"http://127.0.0.1:3939/mcp"}"#,
             "3939"
-        ), "unbound URL without workspace= is not managed");
+        ), "bare Nexus URL is the global entry");
+        assert!(!entry_is_nexus_managed(
+            "nexus",
+            r#"{"type":"http","url":"http://127.0.0.1:4000/mcp"}"#,
+            "3939"
+        ));
         assert!(entry_is_nexus_managed(
             "nexus",
             r#"{"type":"http","url":"http://127.0.0.1:3939/mcp?workspace=%2Ftmp%2Fapp","headers":{"X-Nexus-Workspace":"/tmp/app"}}"#,
@@ -4221,6 +4640,123 @@ mod agent_setup_tests {
         assert!(noop.diff.contains("nothing changed"), "codex noop diff: {}", noop.diff);
         let config = fs::read_to_string(dir.join(".codex").join("config.toml")).unwrap();
         assert_eq!(config.matches("[mcp_servers.nexus]").count(), 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn temp_global_env(prefix: &str) -> GlobalEnv {
+        let dir = unique_dir(prefix);
+        GlobalEnv { home: dir, xdg_config_home: None }
+    }
+
+    #[test]
+    fn global_url_is_bare_and_never_names_a_workspace() {
+        let bare = bare_global_url(Some("http://localhost:3939/mcp?workspace=%2Ftmp%2Fapp#x".to_string())).unwrap();
+        assert!(!bare.contains("workspace="));
+        assert!(!bare.contains('?'));
+        assert!(bare_global_url(None).unwrap().starts_with("http://127.0.0.1:"));
+        assert!(!bare_global_url(None).unwrap().contains("workspace="));
+        assert!(bare_global_url(Some("ftp://x".to_string())).is_err());
+        assert!(is_bare_nexus_url(&bare, "3939"));
+        assert!(!is_bare_nexus_url("http://127.0.0.1:3939/mcp?workspace=%2Fa", "3939"));
+    }
+
+    #[test]
+    fn classifier_treats_bare_url_as_managed_and_other_direct_urls_as_unmanaged() {
+        assert!(entry_is_nexus_managed("nexus", r#"{"type":"http","url":"http://127.0.0.1:3939/mcp"}"#, "3939"));
+        assert!(entry_is_nexus_managed("nexus", "url = \"http://localhost:3939/mcp\"\n", "3939"));
+        assert!(!entry_is_nexus_managed("supabase", r#"{"type":"remote","url":"https://mcp.supabase.com/mcp"}"#, "3939"));
+        assert!(!entry_is_nexus_managed("x", r#"{"type":"http","url":"http://127.0.0.1:3939/other"}"#, "3939"));
+    }
+
+    #[test]
+    fn claude_cli_argv_is_a_plain_array() {
+        assert_eq!(
+            claude_mcp_add_args("http://127.0.0.1:3939/mcp"),
+            vec!["mcp", "add", "--scope", "user", "--transport", "http", "nexus", "http://127.0.0.1:3939/mcp"]
+        );
+        assert_eq!(claude_mcp_remove_args(), vec!["mcp", "remove", "nexus", "--scope", "user"]);
+    }
+
+    #[test]
+    fn opencode_global_write_keeps_other_keys_backs_up_and_is_idempotent() {
+        let env = temp_global_env("nexus-oc-global");
+        let path = env.opencode_config();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"model":"m","mcp":{"other":{"type":"remote","url":"https://x.example/mcp"}}}"#).unwrap();
+        let backup = opencode_connect_at(&path, "http://127.0.0.1:3939/mcp").unwrap();
+        assert!(!backup.is_empty() && PathBuf::from(&backup).is_file());
+        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["model"], "m");
+        assert_eq!(doc["mcp"]["other"]["url"], "https://x.example/mcp");
+        assert_eq!(doc["mcp"]["nexus"]["type"], "remote");
+        assert_eq!(doc["mcp"]["nexus"]["url"], "http://127.0.0.1:3939/mcp");
+        assert!(!fs::read_to_string(&path).unwrap().contains("workspace="));
+        // Second connect changes nothing and makes no new backup.
+        assert_eq!(opencode_connect_at(&path, "http://127.0.0.1:3939/mcp").unwrap(), "");
+        let status = global_status_in("opencode", &env, "3939", false).unwrap();
+        assert!(status.connected && status.installed);
+        // Remove is idempotent and keeps the rest.
+        opencode_remove_at(&path).unwrap();
+        opencode_remove_at(&path).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(doc["mcp"].get("nexus").is_none());
+        assert_eq!(doc["mcp"]["other"]["url"], "https://x.example/mcp");
+        assert!(!global_status_in("opencode", &env, "3939", false).unwrap().connected);
+        fs::remove_dir_all(&env.home).ok();
+    }
+
+    #[test]
+    fn opencode_global_write_refuses_invalid_json_untouched() {
+        let env = temp_global_env("nexus-oc-bad");
+        let path = env.opencode_config();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let broken = "{ // comment\n \"mcp\": {";
+        fs::write(&path, broken).unwrap();
+        assert!(opencode_connect_at(&path, "http://127.0.0.1:3939/mcp").is_err());
+        assert!(opencode_remove_at(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+        fs::remove_dir_all(&env.home).ok();
+    }
+
+    #[test]
+    fn opencode_remove_on_missing_file_is_ok_and_creates_nothing() {
+        let env = temp_global_env("nexus-oc-missing");
+        let path = env.opencode_config();
+        assert_eq!(opencode_remove_at(&path).unwrap(), "");
+        assert!(!path.exists());
+        fs::remove_dir_all(&env.home).ok();
+    }
+
+    #[test]
+    fn claude_global_status_reads_user_entry() {
+        let env = temp_global_env("nexus-claude-global");
+        assert!(!global_status_in("claude", &env, "3939", false).unwrap().connected);
+        fs::write(env.claude_config(), r#"{"mcpServers":{"nexus":{"type":"http","url":"http://127.0.0.1:3939/mcp"}}}"#).unwrap();
+        let status = global_status_in("claude", &env, "3939", false).unwrap();
+        assert!(status.connected && status.installed);
+        assert_eq!(status.detail, "Connected for all projects");
+        fs::write(env.claude_config(), r#"{"mcpServers":{"nexus":{"type":"http","url":"http://127.0.0.1:3939/mcp?workspace=%2Fa"}}}"#).unwrap();
+        assert!(!global_status_in("claude", &env, "3939", false).unwrap().connected);
+        assert!(global_status_in("codex", &env, "3939", false).is_err());
+        fs::remove_dir_all(&env.home).ok();
+    }
+
+    #[test]
+    fn agent_config_step_falls_back_to_the_global_entry() {
+        let dir = unique_dir("nexus-step");
+        let path = dir.join(".mcp.json");
+        // No project file, global present -> pass.
+        let step = agent_config_step(&path, || true);
+        assert!(step.ok && step.detail == "Connected for all projects");
+        // No project file, no global -> fail.
+        assert!(!agent_config_step(&path, || false).ok);
+        // Project file without nexus entry + global -> pass.
+        fs::write(&path, r#"{"mcpServers":{}}"#).unwrap();
+        assert!(agent_config_step(&path, || true).ok);
+        // Project entry wins when both exist (global never consulted).
+        fs::write(&path, r#"{"mcpServers":{"nexus":{"url":"http://127.0.0.1:3939/mcp?workspace=%2Fa"}}}"#).unwrap();
+        let step = agent_config_step(&path, || panic!("global must not be consulted"));
+        assert!(step.ok && step.detail.contains(".mcp.json"));
         fs::remove_dir_all(&dir).ok();
     }
 

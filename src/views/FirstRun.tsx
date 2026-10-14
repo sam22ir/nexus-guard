@@ -1,35 +1,38 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../keychain";
 import { starterProjects, type Project } from "../store";
 import { ThemeButton, nexusHttpUrlFor } from "../onboarding";
-import { AGENTS, agentById, manualSnippet, type AgentInfo } from "../agents";
+import { AGENTS, agentById, errorText, manualSnippet, type AgentInfo } from "../agents";
 import { agentDisplayName } from "../topology";
-import { type AgentConfigEdit, type AgentTestStep, type AuditEntry, type DetectedAgent, type FolderInspection } from "../app/types";
+import { type AgentConfigEdit, type AgentTestStep, type AuditEntry, type DetectedAgent, type FolderInspection, type GlobalAgentStatus } from "../app/types";
 import { Button } from "@heroui/react";
 import { Icon as NxIcon } from "../ui";
 import { inputClass } from "../app/styles";
 import type { NexusStatus } from "../useNexusStatus";
 
-const STEPS = ["Project", "Agent", "Connection"] as const;
+const STEPS = ["Agents", "Project", "Connection"] as const;
 const ALL_SERVICES = ["Supabase", "GitHub"] as const;
 const FIRST_PROMPT = "Which Nexus project am I in?";
 /** How long to wait on the checklist before saying what usually goes wrong. */
 const STUCK_MS = 60_000;
 
 type RowState = "pending" | "ok" | "failed";
+/** Outcome of one connect action, shown next to the agent it was for. */
+type RowResult = { ok: boolean; text: string };
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 
-/** First run, per paper §12: register one real project, connect one agent with
- *  one click, then watch the agent's first real call arrive. Linking a service
- *  is optional and comes after the proof, so the first value needs no accounts.
+/** First run, per paper §12: connect your agents, register one real project, then
+ *  watch the agent's first real call arrive. Claude Code and OpenCode connect once for
+ *  every project; other agents are written per project. Linking a service is optional
+ *  and comes after the proof, so the first value needs no accounts.
  *  The graph on the right gains a node per step. */
 export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAddBinding, onOpenConnectAgent, onSkip, onFinish }: {
   /** The one shared check of Nexus's local server (see useNexusStatus). */
   server: NexusStatus;
   projects: Project[];
-  /** A project registered earlier whose setup was skipped: the wizard reopens at the agent step. */
+  /** A project registered earlier whose setup was skipped: the wizard reopens at the agents step. */
   resumeProject?: Project | null;
   onRegister: (input: { name: string; path: string; repo: string; branch: string }) => string | null;
   onOpenAddBinding: (projectId: string) => void;
@@ -37,7 +40,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   onSkip: () => void;
   onFinish: () => void;
 }) {
-  const [step, setStep] = useState(resumeProject ? 1 : 0);
+  const [step, setStep] = useState(0);
   const [name, setName] = useState(resumeProject?.name ?? "");
   const [nameTouched, setNameTouched] = useState(!!resumeProject);
   const [path, setPath] = useState(resumeProject?.path ?? "");
@@ -48,14 +51,18 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   // GitHub only connects when this build has the Nexus GitHub App set up; otherwise hide it so nobody hits a dead end.
   const [githubReady, setGithubReady] = useState(false);
   const SERVICES = githubReady ? ALL_SERVICES : ALL_SERVICES.filter((s) => s !== "GitHub");
+  // The agents on this machine, all ticked when found. Without a detection, the common list is shown unticked.
   const [agents, setAgents] = useState<readonly AgentInfo[]>(AGENTS);
   const [agentsFound, setAgentsFound] = useState(false);
-  const [agentId, setAgentId] = useState<string | null>(AGENTS[0].id);
-  const [written, setWritten] = useState<AgentConfigEdit | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState("");
-  // Results of test_agent_setup. These describe Nexus's side only, never the agent's first call.
-  const [checks, setChecks] = useState<AgentTestStep[]>([]);
+  const [ticked, setTicked] = useState<Record<string, boolean>>({});
+  // Whether Claude Code / OpenCode already have the one user-level entry.
+  const [globalStatus, setGlobalStatus] = useState<Record<string, GlobalAgentStatus>>({});
+  const [globalResults, setGlobalResults] = useState<Record<string, RowResult>>({});
+  const [connectingGlobal, setConnectingGlobal] = useState(false);
+  // Per-project writes for agents that have no global entry, made when the project is registered.
+  const [projectResults, setProjectResults] = useState<Record<string, RowResult>>({});
+  // Results of test_agent_setup, per agent. These describe Nexus's side only, never the agent's first call.
+  const [checks, setChecks] = useState<Record<string, AgentTestStep[]>>({});
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState("");
   // Items the user ticks off on the checklist. Only the agent's own steps are ticked by hand.
@@ -71,13 +78,15 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   const canRegister = name.trim().length > 0 && path.trim().length > 0 && !nameUsed;
   // Only the agent's real first call proves it works. The setup check only shows Nexus's own side is fine.
   const proven = !!liveCall;
-  const agent = agents.find((a) => a.id === agentId) ?? null;
-  const agentFile = agent?.file ?? "its MCP config";
-  const agentLabel = agent?.name ?? "your agent";
+  const pickedAgents = agents.filter((a) => ticked[a.id]);
+  const globalPicked = pickedAgents.filter((a) => a.global);
+  const projectPicked = pickedAgents.filter((a) => !a.global && a.connect === "auto");
+  const hintAgent = pickedAgents.find((a) => !a.global) ?? pickedAgents[0] ?? null;
+  const agentLabel = pickedAgents.length === 1 ? pickedAgents[0].name : "your agent";
   const callerName = liveCall ? agentDisplayName(liveCall.agent ?? agentLabel) : agentLabel;
-  const connected = !!written;
-  const manual = agent?.connect === "manual";
-  const snippet = project && agent && manual ? manualSnippet(agent.id, project.path) : "";
+  const connectedAgents = agents.filter((a) => (a.global ? globalStatus[a.id]?.connected === true : projectResults[a.id]?.ok === true));
+  const connectedAny = connectedAgents.length > 0;
+  const configPaths = globalPicked.map((a) => globalStatus[a.id]?.config_path).filter((p): p is string => !!p);
 
   // Spot an existing Nexus project in the chosen folder and offer to reuse its name.
   useEffect(() => {
@@ -95,8 +104,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
     invoke<{ configured: boolean }>("github_status").then((status) => setGithubReady(status.configured)).catch(() => undefined);
   }, [desktop]);
 
-  // Preselect the first agent found on this machine so the common case is one click.
-  // Ids the shared list does not know are ignored; with nothing found, the full list is offered.
+  // Show the agents found on this machine, all ticked. Ids the shared list does not know are ignored.
   useEffect(() => {
     if (!desktop) return;
     invoke<DetectedAgent[]>("detect_agents").then((found) => {
@@ -104,9 +112,15 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
         .filter((a) => a.found)
         .map((a) => agentById(a.id))
         .filter((a): a is AgentInfo => a !== null);
-      if (list.length > 0) { setAgents(list); setAgentsFound(true); setAgentId(list[0].id); }
+      if (list.length > 0) {
+        setAgents(list);
+        setAgentsFound(true);
+        setTicked(Object.fromEntries(list.map((a) => [a.id, true])));
+      }
     }).catch(() => undefined);
   }, [desktop]);
+
+  useEffect(() => { refreshGlobalStatus(); }, [desktop]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 3: note the newest audit line already on disk, then wait for a newer one from the agent.
   useEffect(() => {
@@ -129,9 +143,9 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [step, project, desktop]);
 
-  // Run the Nexus-side checks whenever step 3 opens.
+  // Re-check global entries and run the Nexus-side checks whenever step 3 opens.
   useEffect(() => {
-    if (step === 2 && desktop) void runSetupChecks();
+    if (step === 2 && desktop) { refreshGlobalStatus(); void runSetupChecks(); }
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // After 60 seconds on step 3 with no call, say what usually causes it.
@@ -141,6 +155,13 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
     const timer = window.setTimeout(() => setStuck(true), STUCK_MS);
     return () => window.clearTimeout(timer);
   }, [step, liveCall]);
+
+  function refreshGlobalStatus() {
+    if (!desktop) return;
+    invoke<GlobalAgentStatus[]>("global_agent_status")
+      .then((list) => setGlobalStatus(Object.fromEntries(list.map((s) => [s.agent_id, s]))))
+      .catch(() => undefined);
+  }
 
   function changePath(value: string) {
     setPath(value);
@@ -162,50 +183,83 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
     } catch { /* the message already names nodejs.org */ }
   }
 
-  async function register() {
-    if (registeredId) { setStep(1); return; }
-    if (!canRegister) return;
-    // Declare the folder's real git identity. A hard-coded branch that differs
-    // from the checked-out one makes Nexus fail closed ("the Git branch changed").
-    let repo = "";
-    let branch = "main";
-    if (desktop) {
-      try {
-        const found = await invoke<FolderInspection>("inspect_project_folder", { workspacePath: path.trim() });
-        if (found.git_remote) repo = found.git_remote;
-        if (found.git_branch) branch = found.git_branch;
-      } catch { /* a folder with no git keeps the defaults */ }
-    }
-    const id = onRegister({ name: name.trim(), path: path.trim(), repo, branch });
-    if (!id) { setError("A project with that name already exists."); return; }
-    setRegisteredId(id);
-    setError("");
-    setStep(1);
+  function toggleAgent(id: string) {
+    setTicked((current) => ({ ...current, [id]: !current[id] }));
   }
 
-  async function connectAgent() {
-    if (!project || !agent) return;
-    if (!desktop) { setConnectError("Open the desktop app to connect an agent."); return; }
-    setConnecting(true); setConnectError("");
+  /** Writes one user-level entry for each ticked Claude Code / OpenCode. Every outcome is shown, failures included. */
+  async function connectGlobal() {
+    if (!desktop || globalPicked.length === 0) return;
+    setConnectingGlobal(true);
     await restart();
-    const httpUrl = nexusHttpUrlFor(project.path);
-    try {
-      const result = await invoke<string | AgentConfigEdit>("connect_agent_to_project", { workspacePath: project.path, agentId: agent.id, httpUrl });
-      setWritten(typeof result === "string" ? { path: result, backup: "", diff: "" } : result);
-      await runSetupChecks();
-    } catch {
-      setConnectError(`Could not write ${agentFile}. Check the folder still exists and the file is valid, or use “Prefer to run the command yourself?” below.`);
-    } finally {
-      setConnecting(false);
+    const results: Record<string, RowResult> = {};
+    for (const a of globalPicked) {
+      try {
+        const status = await invoke<GlobalAgentStatus>("connect_agent_globally", { agentId: a.id });
+        setGlobalStatus((current) => ({ ...current, [a.id]: status }));
+        results[a.id] = status.connected
+          ? { ok: true, text: "Connected for all projects." }
+          : { ok: false, text: status.detail || `Nexus could not confirm the ${a.name} entry.` };
+      } catch (e) {
+        results[a.id] = { ok: false, text: errorText(e, `Could not connect ${a.name}. Try again.`) };
+      }
     }
+    setGlobalResults((current) => ({ ...current, ...results }));
+    setConnectingGlobal(false);
+  }
+
+  /** Writes the per-project entry for each agent that has no global one. Failures are kept for step 3. */
+  async function connectProjectAgents(workspacePath: string, targets: AgentInfo[]) {
+    if (targets.length === 0) return;
+    await restart();
+    const results: Record<string, RowResult> = {};
+    for (const a of targets) {
+      try {
+        const result = await invoke<string | AgentConfigEdit>("connect_agent_to_project", { workspacePath, agentId: a.id, httpUrl: nexusHttpUrlFor(workspacePath) });
+        results[a.id] = { ok: true, text: `Wrote ${typeof result === "string" ? result : result.path}.` };
+      } catch (e) {
+        results[a.id] = { ok: false, text: errorText(e, `Could not write ${a.file}. Check the folder still exists and the file is valid.`) };
+      }
+    }
+    setProjectResults((current) => ({ ...current, ...results }));
+  }
+
+  async function register() {
+    if (!registeredId) {
+      if (!canRegister) return;
+      // Declare the folder's real git identity. A hard-coded branch that differs
+      // from the checked-out one makes Nexus fail closed ("the Git branch changed").
+      let repo = "";
+      let branch = "main";
+      if (desktop) {
+        try {
+          const found = await invoke<FolderInspection>("inspect_project_folder", { workspacePath: path.trim() });
+          if (found.git_remote) repo = found.git_remote;
+          if (found.git_branch) branch = found.git_branch;
+        } catch { /* a folder with no git keeps the defaults */ }
+      }
+      const id = onRegister({ name: name.trim(), path: path.trim(), repo, branch });
+      if (!id) { setError("A project with that name already exists."); return; }
+      setRegisteredId(id);
+      setError("");
+    }
+    // Per-project agents are written now that the folder is registered. Agents already written are left alone.
+    await connectProjectAgents(path.trim(), projectPicked.filter((a) => projectResults[a.id]?.ok !== true));
+    setStep(2);
   }
 
   async function runSetupChecks() {
     if (!project) return;
     if (!desktop) { setTestError("Open the desktop app to run the check."); return; }
+    const targets = pickedAgents.filter((a) => a.connect === "auto");
+    if (targets.length === 0) return;
     setTesting(true); setTestError("");
     try {
-      setChecks(await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId: agentId ?? "claude", httpUrl: nexusHttpUrlFor(project.path) }));
+      const next: Record<string, AgentTestStep[]> = {};
+      for (const a of targets) {
+        next[a.id] = await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId: a.id, httpUrl: nexusHttpUrlFor(project.path) });
+      }
+      setChecks((current) => ({ ...current, ...next }));
     } catch {
       setTestError("Could not run the check. Make sure Nexus is running and the project folder still exists.");
     } finally {
@@ -229,17 +283,25 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
     if (project) onOpenAddBinding(project.id);
   }
 
+  /** Live state of one per-project agent's config, from its own connect result and the setup check. */
+  function configState(a: AgentInfo): { state: RowState; detail: string | null } {
+    const written = projectResults[a.id];
+    const check = (checks[a.id] ?? []).find((c) => c.step === "Agent config");
+    if (!written) return { state: "pending", detail: null };
+    if (!written.ok) return { state: "failed", detail: written.text };
+    if (check) return { state: check.ok ? "ok" : "failed", detail: check.ok ? null : check.detail };
+    return { state: "pending", detail: null };
+  }
+
   // A real project of the user's only: the built-in sample projects must not be shown as if they were theirs.
   const otherProject = projects.find((p) => p.id !== registeredId && !starterProjects.some((sample) => sample.id === p.id) && (p.connections ?? []).length > 0);
   const summaries = [
+    connectedAny ? connectedAgents.map((a) => a.name).join(", ") : null,
     project ? project.path : null,
-    connected && agent ? agent.name : null,
     proven ? "Connected" : null,
   ];
 
   const nexusState: RowState = running === null ? "pending" : running ? "ok" : "failed";
-  const configCheck = checks.find((c) => c.step === "Agent config");
-  const configState: RowState = configCheck ? (configCheck.ok ? "ok" : "failed") : checks.length > 0 || testError ? "failed" : "pending";
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-(--canvas)">
@@ -286,6 +348,56 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-(--line-soft) pt-4">
             {step === 0 && (
               <div className="flex flex-col gap-3">
+                <div>
+                  <h2 className="text-[16px] font-semibold text-(--text)">Connect your agents</h2>
+                  <p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Pick the agents you use. Claude Code and OpenCode connect once and work in every project.</p>
+                  {!agentsFound && <p className="mt-1 text-[12px] text-(--muted-2)">{desktop ? "No agent was detected, so these are the common ones." : "The desktop app finds the agents on this machine."}</p>}
+                </div>
+                <ul className="flex flex-col rounded-[12px] border border-(--line)" aria-label="Agents">
+                  {agents.map((a) => {
+                    const result = globalResults[a.id];
+                    const alreadyConnected = a.global && globalStatus[a.id]?.connected === true;
+                    return (
+                      <li key={a.id} className="border-t border-(--line-soft) first:border-t-0">
+                        <label className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5">
+                          <input type="checkbox" className="mt-1 size-4 shrink-0 accent-(--text)" checked={!!ticked[a.id]} disabled={connectingGlobal} onChange={() => toggleAgent(a.id)} />
+                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="flex flex-wrap items-center gap-2 text-[13px] text-(--text)">
+                              {a.name}
+                              {alreadyConnected && <span className="text-[11.5px] font-medium text-(--green)">Already connected</span>}
+                            </span>
+                            <span className="text-[12px] text-(--muted)">{a.global ? "Connects once for all your projects" : a.connect === "auto" ? "Set up for each project (next step)" : "Paste a snippet later"}</span>
+                            {result && (
+                              <span className="flex items-start gap-1.5 text-[12px] leading-[1.5]" style={{ color: result.ok ? "var(--green)" : "var(--red)" }} role={result.ok ? "status" : "alert"}>
+                                <NxIcon name={result.ok ? "check" : "x"} size={13} />
+                                <span className="min-w-0 flex-1">{result.text}</span>
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {globalPicked.length > 0 && (
+                  <p className="text-[12px] leading-[1.55] text-(--muted)">
+                    This adds one entry to <span className="nx-mono">{configPaths.length > 0 ? configPaths.join(" and ") : "your user config"}</span> (a backup is kept). Remove it any time from Agents.
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button size="sm" isDisabled={!desktop || globalPicked.length === 0 || connectingGlobal} onPress={() => void connectGlobal()}>
+                    {connectingGlobal ? "Connecting…" : `Connect ${globalPicked.length} ${globalPicked.length === 1 ? "agent" : "agents"}`}
+                  </Button>
+                  <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">
+                    {!desktop ? "Needs the desktop app." : globalPicked.length === 0 ? "Tick Claude Code or OpenCode to connect them once." : "Connects once for all your projects."}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {step === 1 && (
+              <div className="flex flex-col gap-3">
                 <div><h2 className="text-[16px] font-semibold text-(--text)">Add your project</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Pick the folder your agent works in.</p></div>
                 <label className="nx-field">
                   Project folder
@@ -306,41 +418,10 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
                   <input value={name} onChange={(e) => { setName(e.target.value); setNameTouched(true); setError(""); }} placeholder="Koupa" disabled={!!registeredId} className={inputClass} />
                   {nameUsed && <span className="text-[12px] text-(--red)" role="alert">A project with this name already exists.</span>}
                 </label>
-                {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
-              </div>
-            )}
-
-            {step === 1 && (
-              <div className="flex flex-col gap-3">
-                <div><h2 className="text-[16px] font-semibold text-(--text)">Connect your agent</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">{agentsFound ? "Found on this machine. Pick the one you use." : desktop ? "No agent was detected, so these are the common ones." : "The desktop app lists the agents it finds."}</p></div>
-                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Agent">
-                  {agents.map((a) => (
-                    <button key={a.id} type="button" role="radio" aria-checked={agentId === a.id} onClick={() => { setAgentId(a.id); setWritten(null); setChecks([]); setConnectError(""); setTestError(""); setTicks({}); }} className="nx-badge cursor-pointer !px-3.5 !py-2 text-[12.5px]" style={agentId === a.id ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{a.name}</button>
-                  ))}
-                </div>
-                {manual && agent ? (
-                  <div className="flex flex-col gap-2">
-                    <pre className="nx-mono overflow-x-auto rounded-[10px] bg-(--raised) p-3 text-[12px] leading-[1.55] text-(--text)">{snippet}</pre>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Button size="sm" variant="outline" onPress={() => copyText("snippet", snippet)}>{copied === "snippet" ? "Copied" : "Copy"}</Button>
-                      <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">Add this to <span className="nx-mono">{agent.file}</span> in your project folder.</span>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Button size="sm" isDisabled={!project || !agent || connecting || !desktop} onPress={() => void connectAgent()}>{connecting ? "Connecting…" : connected ? "Connect again" : agent ? `Connect ${agent.name}` : "Pick an agent"}</Button>
-                      <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">{desktop ? <>Adds one Nexus entry to <span className="nx-mono">{agentFile}</span> in your project. Your other servers are kept and a backup is saved first.</> : "Needs the desktop app."}</span>
-                    </div>
-                    {connectError && <p className="text-[12px] text-(--red)" role="alert">{connectError}</p>}
-                    {written && (
-                      <p className="rounded-[10px] bg-(--green-bg) px-3 py-2 text-[12px] leading-[1.55] text-(--green)">
-                        Wrote <span className="nx-mono">{written.path}</span>{written.diff ? ` · ${written.diff}` : ""}. {written.backup ? <>Backup at <span className="nx-mono">{written.backup}</span>.</> : "New file, so nothing to back up."}
-                      </p>
-                    )}
-                    {project && <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, agentId)}>Prefer to run the command yourself?</button>}
-                  </>
+                {projectPicked.length > 0 && (
+                  <p className="text-[12px] leading-[1.55] text-(--muted)">Nexus also sets up {projectPicked.map((a) => a.name).join(", ")} in this folder when you continue.</p>
                 )}
+                {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
               </div>
             )}
 
@@ -359,32 +440,67 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
                     {running === null && !desktop && <span className="text-[12px] text-(--muted)">Needs the desktop app.</span>}
                   </LiveRow>
 
-                  {agent && !manual && (
-                    <LiveRow state={configState}>
-                      <span className="text-[13px] text-(--text)"><span className="nx-mono">{agent.file}</span> has the Nexus entry</span>
-                      {configState === "failed" && <span className="text-[12px] text-(--muted)">{configCheck?.detail ?? `Nothing is written yet. Go back and connect ${agent.name}.`}</span>}
-                    </LiveRow>
-                  )}
+                  {pickedAgents.map((a) => {
+                    if (a.global) {
+                      const status = globalStatus[a.id];
+                      const globalState: RowState = status ? (status.connected ? "ok" : "failed") : "pending";
+                      return (
+                        <Fragment key={a.id}>
+                          <LiveRow state={globalState}>
+                            <span className="text-[13px] text-(--text)">{a.name} has Nexus for all projects</span>
+                            {globalState === "failed" && <span className="text-[12px] text-(--muted)">{globalResults[a.id]?.text ?? status?.detail ?? `Nothing is written yet. Go back and connect ${a.name}.`}</span>}
+                          </LiveRow>
+                          <TickRow ticked={!!ticks[`${a.id}:restart`]} onToggle={() => toggleTick(`${a.id}:restart`)}>
+                            <span className="text-[13px] text-(--text)">{a.globalRestart}</span>
+                          </TickRow>
+                          {project && (
+                            <TickRow ticked={!!ticks[`${a.id}:open`]} onToggle={() => toggleTick(`${a.id}:open`)}>
+                              <span className="text-[13px] text-(--text)">Open {a.name} in this project folder</span>
+                              <span className="nx-mono text-[12px] text-(--muted)">{project.path}</span>
+                            </TickRow>
+                          )}
+                        </Fragment>
+                      );
+                    }
 
-                  {agent && manual && (
-                    <TickRow ticked={!!ticks.snippet} onToggle={() => toggleTick("snippet")}>
-                      <span className="text-[13px] text-(--text)">Add the snippet to <span className="nx-mono">{agent.file}</span></span>
-                    </TickRow>
-                  )}
+                    if (a.connect === "manual") {
+                      const snippet = project ? manualSnippet(a.id, project.path) : "";
+                      return (
+                        <TickRow key={a.id} ticked={!!ticks[`${a.id}:snippet`]} onToggle={() => toggleTick(`${a.id}:snippet`)}>
+                          <span className="text-[13px] text-(--text)">Add the snippet to <span className="nx-mono">{a.file}</span></span>
+                          {snippet && (
+                            <span className="flex flex-col gap-2">
+                              <pre className="nx-mono overflow-x-auto rounded-[10px] bg-(--raised) p-3 text-[12px] leading-[1.55] text-(--text)">{snippet}</pre>
+                              <span><Button size="sm" variant="outline" onPress={() => copyText(`snippet:${a.id}`, snippet)}>{copied === `snippet:${a.id}` ? "Copied" : "Copy"}</Button></span>
+                            </span>
+                          )}
+                        </TickRow>
+                      );
+                    }
 
-                  {agent && (
-                    <TickRow ticked={!!ticks.restart} onToggle={() => toggleTick("restart")}>
-                      <span className="text-[13px] text-(--text)">{agent.restart}</span>
-                      {project && <span className="nx-mono text-[12px] text-(--muted)">{project.path}</span>}
-                    </TickRow>
-                  )}
-
-                  {agent?.trustPrompt && (
-                    <TickRow ticked={!!ticks.trust} onToggle={() => toggleTick("trust")}>
-                      <span className="text-[13px] text-(--text)">{emphasizeChoice(agent.trustPrompt)}</span>
-                      <span className="text-[12px] text-(--muted)">If you skip this, the agent never connects.</span>
-                    </TickRow>
-                  )}
+                    const config = configState(a);
+                    return (
+                      <Fragment key={a.id}>
+                        <LiveRow state={config.state}>
+                          <span className="text-[13px] text-(--text)"><span className="nx-mono">{a.file}</span> has the Nexus entry</span>
+                          {config.state === "failed" && <span className="text-[12px] text-(--muted)">{config.detail}</span>}
+                          {config.state === "failed" && project && (
+                            <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, a.id)}>Prefer to run the command yourself?</button>
+                          )}
+                        </LiveRow>
+                        <TickRow ticked={!!ticks[`${a.id}:restart`]} onToggle={() => toggleTick(`${a.id}:restart`)}>
+                          <span className="text-[13px] text-(--text)">{a.restart}</span>
+                          {project && <span className="nx-mono text-[12px] text-(--muted)">{project.path}</span>}
+                        </TickRow>
+                        {a.trustPrompt && (
+                          <TickRow ticked={!!ticks[`${a.id}:trust`]} onToggle={() => toggleTick(`${a.id}:trust`)}>
+                            <span className="text-[13px] text-(--text)">{emphasizeChoice(a.trustPrompt)}</span>
+                            <span className="text-[12px] text-(--muted)">If you skip this, the agent never connects.</span>
+                          </TickRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
 
                   <TickRow ticked={!!ticks.prompt} onToggle={() => toggleTick("prompt")}>
                     <span className="text-[13px] text-(--text)">Send this message to {agentLabel}:</span>
@@ -409,7 +525,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
 
                 {!liveCall && stuck && (
                   <div className="flex flex-col gap-2 rounded-[12px] bg-(--orange-bg) px-3.5 py-2.5 text-[12.5px] leading-[1.55] text-(--orange)" role="status">
-                    <p><strong className="font-semibold">Still waiting. Most likely cause:</strong> {agent?.stuckHint}</p>
+                    <p><strong className="font-semibold">Still waiting. Most likely cause:</strong> {hintAgent?.stuckHint ?? "Make sure your agent is open in the project folder."}</p>
                     <p>Nexus only runs while this app is open.</p>
                   </div>
                 )}
@@ -447,17 +563,17 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
           </div>
 
           <div className="mt-4 flex shrink-0 items-center justify-between gap-2 border-t border-(--line-soft) pt-3">
-            {step === 0 ? <span className="min-w-0 flex-1 text-[11.5px] text-(--muted)">{!registeredId && !canRegister ? "Choose a folder and a name to continue." : ""}</span> : <Button size="sm" variant="ghost" onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>}
-            {step === 0 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
-            {step === 1 && <Button size="sm" variant={connected || manual ? "primary" : "outline"} onPress={() => setStep(2)}>{connected || manual ? "Continue" : "Skip this step"}</Button>}
+            {step === 0 ? <span className="min-w-0 flex-1 text-[11.5px] text-(--muted)">{connectedAny ? "" : "Connect an agent now, or set it up later."}</span> : <Button size="sm" variant="ghost" onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>}
+            {step === 0 && <Button size="sm" variant={connectedAny ? "primary" : "outline"} isDisabled={connectingGlobal} onPress={() => setStep(1)}>{connectedAny ? "Continue" : "Skip this step"}</Button>}
+            {step === 1 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
             {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish later"}</Button>}
           </div>
         </section>
 
         <section className="nx-card flex min-h-[320px] flex-col" aria-label="Your graph">
           <span className="nx-eyebrow">{project ? "Your graph · builds as you go" : "What Nexus does"}</span>
-          <Graph project={project} agentName={connected ? agent?.name ?? null : null} lit={proven} other={proven ? otherProject ?? null : null} />
-          <p className="mt-auto pt-4 text-[12px] text-(--muted-2)">{project ? "Step 1 adds the project, step 2 the agent. In step 3 the lines light up." : "Connect your agents once. Link your services once."}</p>
+          <Graph project={project} agentName={connectedAny ? connectedAgents.map((a) => a.name).join(", ") : null} lit={proven} other={proven ? otherProject ?? null : null} />
+          <p className="mt-auto pt-4 text-[12px] text-(--muted-2)">{project ? "Step 1 connects your agents, step 2 adds the project. In step 3 the lines light up." : "Connect your agents once. Link your services once."}</p>
         </section>
       </div>
     </div>

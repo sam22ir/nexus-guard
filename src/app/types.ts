@@ -17,6 +17,9 @@ export type DetectedAgent = { id: string; name: string; found: boolean; detail: 
 
 export type AgentTestStep = { step: string; ok: boolean; detail: string };
 
+/** Backend global_agent_status / connect_agent_globally shape: one user-level entry for Claude Code or OpenCode. */
+export type GlobalAgentStatus = { agent_id: string; installed: boolean; connected: boolean; config_path: string; detail: string };
+
 export type AuditEntry = {
   ts?: string | null;
   session?: string | null;

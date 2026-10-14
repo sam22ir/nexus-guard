@@ -4,10 +4,10 @@ import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "../onboarding";
 import { agentDisplayName } from "../topology";
-import { agentById } from "../agents";
+import { agentById, errorText } from "../agents";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
-import { type AgentConfigEdit, type UnmanagedMcpEntry, type DetectedAgent } from "../app/types";
+import { type AgentConfigEdit, type UnmanagedMcpEntry, type DetectedAgent, type GlobalAgentStatus } from "../app/types";
 import { Card, CardHeading } from "../app/common";
 import { timeAgo, useAuditLog } from "../app/audit";
 
@@ -86,7 +86,43 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
     if (source.includes("codex") || source.includes("config.toml")) return "codex";
     return "claude";
   }
+  // Claude Code and OpenCode can hold one user-level Nexus entry that covers every project.
+  const [globalStatus, setGlobalStatus] = useState<Record<string, GlobalAgentStatus>>({});
+  const [globalBusy, setGlobalBusy] = useState<string | null>(null);
+  const [globalMsg, setGlobalMsg] = useState<Record<string, string>>({});
+  function refreshGlobal() {
+    if (!desktopAvailable()) return;
+    invoke<GlobalAgentStatus[]>("global_agent_status")
+      .then((list) => setGlobalStatus(Object.fromEntries(list.map((s) => [s.agent_id, s]))))
+      .catch(() => undefined);
+  }
+  async function connectOnce(agentId: string) {
+    setGlobalBusy(agentId); setGlobalMsg((m) => ({ ...m, [agentId]: "" }));
+    try {
+      const status = await invoke<GlobalAgentStatus>("connect_agent_globally", { agentId });
+      setGlobalStatus((s) => ({ ...s, [agentId]: status }));
+      setGlobalMsg((m) => ({ ...m, [agentId]: status.connected ? `Connected for all projects. ${agentById(agentId)?.globalRestart ?? ""}`.trim() : status.detail || "Nexus could not confirm the entry." }));
+    } catch (e) {
+      setGlobalMsg((m) => ({ ...m, [agentId]: errorText(e, "Could not connect for all projects. Try again.") }));
+    } finally {
+      setGlobalBusy(null);
+    }
+  }
+  async function removeOnce(agentId: string, name: string) {
+    if (!window.confirm(`Removes Nexus from ${name}'s user config. Project entries are not touched.`)) return;
+    setGlobalBusy(agentId); setGlobalMsg((m) => ({ ...m, [agentId]: "" }));
+    try {
+      const status = await invoke<GlobalAgentStatus>("remove_global_agent_entry", { agentId });
+      setGlobalStatus((s) => ({ ...s, [agentId]: status }));
+      setGlobalMsg((m) => ({ ...m, [agentId]: status.detail || `Removed from ${name}'s user config.` }));
+    } catch (e) {
+      setGlobalMsg((m) => ({ ...m, [agentId]: errorText(e, "Could not remove the entry. Try again.") }));
+    } finally {
+      setGlobalBusy(null);
+    }
+  }
   const desktop = desktopAvailable();
+  useEffect(() => { refreshGlobal(); }, [desktop]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!desktop) return;
     refreshAgents();
@@ -222,6 +258,22 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
                     <Empty title="Not detected">Install {current.name} and it will appear here, ready to connect.</Empty>
                   ) : (
                     <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-4">
+                      {agentById(current.id)?.global && (() => {
+                        const connectedGlobal = globalStatus[current.id]?.connected === true;
+                        return (
+                          <div className="mb-5 rounded-[12px] border border-(--line) px-3 py-2.5">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <Badge tone={connectedGlobal ? "success" : "neutral"} dot={connectedGlobal}>{connectedGlobal ? "Connected for all projects" : "Not connected for all projects"}</Badge>
+                              <span className="ml-auto flex gap-2">
+                                <Button size="sm" variant="outline" isDisabled={!desktop || globalBusy !== null} onPress={() => void connectOnce(current.id)}>{globalBusy === current.id ? "Connecting…" : "Connect once"}</Button>
+                                {connectedGlobal && <Button size="sm" variant="danger-soft" isDisabled={!desktop || globalBusy !== null} onPress={() => void removeOnce(current.id, current.name)}>{globalBusy === current.id ? "Removing…" : "Remove"}</Button>}
+                              </span>
+                            </div>
+                            {globalMsg[current.id] && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{globalMsg[current.id]}</p>}
+                            {connectedGlobal && !current.http_reachable && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--orange)">Nexus only runs while this app is open, so {current.name} shows a failed nexus server until you reopen it.</p>}
+                          </div>
+                        );
+                      })()}
                       <CardHeading eyebrow={`Connect to Nexus · ${cliProject?.name ?? "no project"}`} title="Connect your agent to Nexus, not straight to a service" action={<span className="flex flex-col items-end gap-1"><Badge tone={current.http_reachable ? "success" : "warning"} dot>{current.http_reachable ? "Nexus is running" : "Nexus not running"}</Badge>{!current.http_reachable && <span className="text-[11.5px] text-(--muted)">Nexus only runs while this app is open.</span>}</span>} />
                       <div className="rounded-[12px] border border-(--line) px-3 py-2.5">
                         <div className="flex items-center gap-3">

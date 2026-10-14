@@ -4,9 +4,10 @@ import { desktopAvailable } from "../keychain";
 import { manifestAccountFor, tierForProvider, type Account, type Connection, type Project } from "../store";
 import { accountGroupKey, blastRadiusWarningsFor } from "../accounts";
 import { agentDisplayName } from "../topology";
+import { agentById } from "../agents";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
-import { type NavTarget, type FolderInspection, type DirectKey } from "../app/types";
+import { type NavTarget, type FolderInspection, type DirectKey, type GlobalAgentStatus } from "../app/types";
 import { StatusDot, Card, CardHeading } from "../app/common";
 import { timeAgo, useAuditLog, AuditRow } from "../app/audit";
 
@@ -25,6 +26,17 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [project.id, project.path]);
+  // Name of an agent that already has the one user-level Nexus entry (Claude Code or OpenCode), if any.
+  const [globalAgentName, setGlobalAgentName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!desktopAvailable()) return;
+    invoke<GlobalAgentStatus[]>("global_agent_status")
+      .then((list) => {
+        const hit = list.find((s) => s.connected);
+        setGlobalAgentName(hit ? agentById(hit.agent_id)?.name ?? hit.agent_id : null);
+      })
+      .catch(() => undefined);
+  }, []);
   const [verifying, setVerifying] = useState(false);
   const [overwriting, setOverwriting] = useState(false);
   const [liveCheck, setLiveCheck] = useState<{ ok: boolean; text: string } | null>(null);
@@ -141,7 +153,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
 
   const steps = [
     { done: true, label: "Folder registered", detail: project.path },
-    { done: agentsSeen.length > 0, label: agentsSeen.length > 0 ? `${agentsSeen.map((a) => agentDisplayName(a.name)).join(", ")} reached Nexus` : "Connect an agent", detail: agentsSeen.length > 0 ? "Its calls show up under Activity" : "One click writes the config. Then restart the agent and ask it which Nexus project it is in." },
+    { done: agentsSeen.length > 0, label: agentsSeen.length > 0 ? `${agentsSeen.map((a) => agentDisplayName(a.name)).join(", ")} reached Nexus` : globalAgentName ? "Already connected for all projects. Open your agent in this folder." : "Connect an agent", detail: agentsSeen.length > 0 ? "Its calls show up under Activity" : globalAgentName ? "Then ask it which Nexus project it is in. Its calls show up under Activity." : "One click writes the config. Then restart the agent and ask it which Nexus project it is in." },
     { done: connected.length > 0, label: connected.length > 0 ? `${connected.length} service${connected.length === 1 ? "" : "s"} connected` : "Add a service (optional)", detail: connected.length > 0 ? connected.map((c) => `${c.provider} → ${c.resource ?? c.target}`).join(" · ") : "Tell Nexus which exact resource this project uses. Browser approval, nothing to type." },
   ];
 
@@ -172,7 +184,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
           </dl>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" isDisabled={verifying || !desktopAvailable()} onPress={() => void verifyOnDisk()}>{verifying ? "Checking…" : "Check project file"}</Button>
-            <Button size="sm" onPress={setupDone && !protectedNow ? onAddConnection : onConnectAgent}>{setupDone && !protectedNow ? "Add a service" : "Connect agent"}</Button>
+            {!(globalAgentName && !setupDone) && <Button size="sm" onPress={setupDone && !protectedNow ? onAddConnection : onConnectAgent}>{setupDone && !protectedNow ? "Add a service" : "Connect agent"}</Button>}
           </div>
         </div>
       </Card>
@@ -238,7 +250,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
                   <span className="nx-row-title">{step.label}</span>
                   <span className="nx-row-sub" title={step.detail}>{step.detail}</span>
                 </span>
-                {i === 1 && !step.done && <Button size="sm" onPress={onConnectAgent}>Connect agent</Button>}
+                {i === 1 && !step.done && !globalAgentName && <Button size="sm" onPress={onConnectAgent}>Connect agent</Button>}
                 {i === 2 && !step.done && <Button size="sm" variant="outline" onPress={onAddConnection}>Add</Button>}
               </div>
             )) : agentsSeen.map((agent) => (

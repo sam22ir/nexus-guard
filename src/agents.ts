@@ -20,7 +20,20 @@ export type AgentInfo = {
   stuckHint: string;
   /** Shown when two agents share a file. */
   note?: string;
+  /** Can connect once for every project through a user-level entry (Claude Code and OpenCode). */
+  global: boolean;
+  /** What to do after the global entry is written. Only set for global agents. */
+  globalRestart?: string;
 };
+
+/** Plain-language error from a Tauri command. Commands reject with a string, not an Error. */
+export function errorText(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+const GLOBAL_RESTART = "Already-open sessions need one restart. New sessions pick Nexus up by themselves.";
 
 export const AGENTS: readonly AgentInfo[] = [
   {
@@ -28,18 +41,23 @@ export const AGENTS: readonly AgentInfo[] = [
     trustPrompt: "Claude Code asks whether to trust the “nexus” server. Choose yes.",
     restart: "Restart Claude Code in this folder.",
     stuckHint: "Run /mcp in Claude Code. If “nexus” is listed as pending or disabled, approve it. If it is missing, restart Claude Code from this project folder.",
+    global: true,
+    globalRestart: GLOBAL_RESTART,
   },
   {
     id: "codex", name: "Codex", file: ".codex/config.toml", connect: "auto",
     trustPrompt: null,
     restart: "Restart Codex in this folder.",
     stuckHint: "Codex only reads this file when it starts inside the project folder, and may need the project marked as trusted. Restart it from here.",
+    global: false,
   },
   {
     id: "opencode", name: "OpenCode", file: "opencode.json", connect: "auto",
     trustPrompt: null,
     restart: "Restart OpenCode in this folder.",
     stuckHint: "Restart OpenCode from the project folder so it re-reads opencode.json.",
+    global: true,
+    globalRestart: GLOBAL_RESTART,
   },
   {
     id: "pi", name: "Pi", file: ".mcp.json", connect: "auto",
@@ -47,18 +65,21 @@ export const AGENTS: readonly AgentInfo[] = [
     restart: "Restart Pi in this folder.",
     stuckHint: "Restart Pi from the project folder so it re-reads .mcp.json.",
     note: "Pi and Claude Code share .mcp.json, so one Nexus entry serves both.",
+    global: false,
   },
   {
     id: "cursor", name: "Cursor", file: ".cursor/mcp.json", connect: "manual",
     trustPrompt: null,
     restart: "Reload the Cursor window.",
     stuckHint: "Open Cursor's MCP settings and check that “nexus” is switched on.",
+    global: false,
   },
   {
     id: "gemini", name: "Gemini CLI", file: ".gemini/settings.json", connect: "manual",
     trustPrompt: null,
     restart: "Restart Gemini CLI in this folder.",
     stuckHint: "Run /mcp in Gemini CLI to see whether “nexus” is listed, and restart it from the project folder.",
+    global: false,
   },
 ];
 
