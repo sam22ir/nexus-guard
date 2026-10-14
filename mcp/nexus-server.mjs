@@ -693,7 +693,8 @@ const MAX_PROJECT_WALK = 24;
  *  Walks from a roots-derived directory up to the nearest ancestor (itself
  *  included) holding a real `.nexus/project.json`. Never reads outside that
  *  chain, never ascends to or above the home directory, never follows a
- *  `.nexus` symlink, and returns the original directory when nothing is found
+ *  `.nexus` symlink, fails closed on any non-directory `.nexus` in the chain,
+ *  never crosses a `.git` boundary, and returns the original directory when nothing is found
  *  so the "unresolved" path is unchanged. Explicit workspaces are never walked. */
 export async function resolveProjectRoot(dir, { homeDir = os.homedir() } = {}) {
   let start;
@@ -703,18 +704,26 @@ export async function resolveProjectRoot(dir, { homeDir = os.homedir() } = {}) {
     return dir;
   }
   const home = await fs.realpath(homeDir).catch(() => path.resolve(homeDir));
-  const hasProject = async (candidate) => {
+  // "project": honour it; "stop": a .nexus entry that is not a real directory (fail closed); "none": keep looking.
+  const inspect = async (candidate) => {
+    const nexusDir = path.join(candidate, ".nexus");
+    let stat;
     try {
-      const nexusDir = path.join(candidate, ".nexus");
-      if (!(await fs.lstat(nexusDir)).isDirectory()) return false; // symlink or file: not honoured
+      stat = await fs.lstat(nexusDir);
+    } catch (error) {
+      return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? "none" : "stop";
+    }
+    if (!stat.isDirectory()) return "stop"; // symlink, file, anything else: never skipped past
+    try {
       const file = path.join(nexusDir, "project.json");
-      if (!(await fs.lstat(file)).isFile()) return false;
+      if (!(await fs.lstat(file)).isFile()) return "none";
       await fs.access(file, fsConstants.R_OK);
-      return true;
+      return "project";
     } catch {
-      return false;
+      return "none";
     }
   };
+  const hasGit = (candidate) => fs.lstat(path.join(candidate, ".git")).then(() => true, () => false);
   let current = start;
   for (let level = 0; level < MAX_PROJECT_WALK; level += 1) {
     if (level > 0 && current === home) break;
@@ -722,7 +731,10 @@ export async function resolveProjectRoot(dir, { homeDir = os.homedir() } = {}) {
       const rel = path.relative(current, home);
       if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) break; // ancestor of home
     }
-    if (await hasProject(current)) return current;
+    const found = await inspect(current);
+    if (found === "project") return current;
+    if (found === "stop") break;
+    if (await hasGit(current)) break; // a repository boundary is never crossed
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;

@@ -33,7 +33,17 @@ export function errorText(error: unknown, fallback: string): string {
   return fallback;
 }
 
-const GLOBAL_RESTART = "Already-open sessions need one restart. New sessions pick Nexus up by themselves.";
+/** Shown when Pi would write the .mcp.json that Claude Code also reads, while Claude Code is connected for all projects. */
+export const PI_SHARED_FILE_WARNING = "Pi shares .mcp.json with Claude Code. Nexus did not write it, so Claude Code keeps working without the extra approval prompt. Add it by hand only if you want a project-only entry.";
+
+/** Exactly what a one-time (all projects) connect changes, for the line shown before the button. */
+export function globalChangeText(agentId: string, configPath?: string | null): string | null {
+  if (agentId === "claude") return "Runs: claude mcp add --scope user --transport http nexus http://localhost:3939/mcp. To undo: claude mcp remove nexus --scope user, or Remove in Agents.";
+  if (agentId === "opencode") return `Adds a nexus entry to ${configPath || "OpenCode's user config"}. A backup of the file is kept.`;
+  return null;
+}
+
+const GLOBAL_RESTART ="Already-open sessions need one restart. New sessions pick Nexus up by themselves.";
 
 export const AGENTS: readonly AgentInfo[] = [
   {

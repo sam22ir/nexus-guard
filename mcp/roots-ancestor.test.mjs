@@ -159,3 +159,55 @@ test("http: an explicit workspace is never walked up", async (t) => {
   assert.equal(await auditExists(src), true);
   assert.equal(await auditExists(root), false);
 });
+
+const NOHOME = { homeDir: "/nonexistent-home" };
+
+test("resolveProjectRoot: a symlinked or file .nexus mid-chain stops the walk (fail closed)", async (t) => {
+  const outside = await tmp(t);
+  await project(outside);
+  for (const kind of ["symlink", "file"]) {
+    const root = await tmp(t);
+    await project(root);
+    const mid = await sub(root, "mid");
+    if (kind === "symlink") await fs.symlink(path.join(outside, ".nexus"), path.join(mid, ".nexus"));
+    else await fs.writeFile(path.join(mid, ".nexus"), "x");
+    const deep = await sub(mid, "src");
+    assert.equal(await resolveProjectRoot(deep, NOHOME), deep, kind);
+  }
+});
+
+test("resolveProjectRoot: a .git directory boundary is not crossed", async (t) => {
+  const root = await tmp(t);
+  await project(root);
+  const other = await sub(root, "vendor", "other-repo");
+  await sub(other, ".git");
+  const deep = await sub(other, "src");
+  assert.equal(await resolveProjectRoot(deep, NOHOME), deep);
+  assert.equal(await resolveProjectRoot(other, NOHOME), other);
+});
+
+test("resolveProjectRoot: a .git file boundary (submodule/worktree) is not crossed", async (t) => {
+  const root = await tmp(t);
+  await project(root);
+  const other = await sub(root, "vendor", "sub");
+  await fs.writeFile(path.join(other, ".git"), "gitdir: ../../.git/modules/sub");
+  const deep = await sub(other, "src");
+  assert.equal(await resolveProjectRoot(deep, NOHOME), deep);
+});
+
+test("resolveProjectRoot: a boundary directory holding the project file itself still resolves", async (t) => {
+  const root = await tmp(t);
+  await sub(root, ".git");
+  await project(root);
+  const deep = await sub(root, "src", "a");
+  assert.equal(await resolveProjectRoot(deep, NOHOME), root);
+  assert.equal(await resolveProjectRoot(root, NOHOME), root);
+});
+
+test("resolveProjectRoot: a project root with .git above plain subfolders resolves", async (t) => {
+  const root = await tmp(t);
+  await project(root);
+  await sub(root, ".git");
+  const deep = await sub(root, "packages", "x", "src");
+  assert.equal(await resolveProjectRoot(deep, NOHOME), root);
+});

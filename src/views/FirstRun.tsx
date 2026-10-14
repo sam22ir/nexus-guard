@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../keychain";
 import { starterProjects, type Project } from "../store";
 import { ThemeButton, nexusHttpUrlFor } from "../onboarding";
-import { AGENTS, agentById, errorText, manualSnippet, type AgentInfo } from "../agents";
+import { AGENTS, PI_SHARED_FILE_WARNING, agentById, errorText, globalChangeText, manualSnippet, type AgentInfo } from "../agents";
 import { agentDisplayName } from "../topology";
 import { type AgentConfigEdit, type AgentTestStep, type AuditEntry, type DetectedAgent, type FolderInspection, type GlobalAgentStatus } from "../app/types";
 import { Button } from "@heroui/react";
@@ -40,6 +40,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   onSkip: () => void;
   onFinish: () => void;
 }) {
+  // A resumed project is already registered, so the wizard always opens at the Agents step; Project shows as done.
   const [step, setStep] = useState(0);
   const [name, setName] = useState(resumeProject?.name ?? "");
   const [nameTouched, setNameTouched] = useState(!!resumeProject);
@@ -80,13 +81,22 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   const proven = !!liveCall;
   const pickedAgents = agents.filter((a) => ticked[a.id]);
   const globalPicked = pickedAgents.filter((a) => a.global);
-  const projectPicked = pickedAgents.filter((a) => !a.global && a.connect === "auto");
+  // Claude Code reads the same .mcp.json as Pi. A project entry named nexus would override the user-level one and bring the trust prompt back.
+  const claudeGlobalActive = globalStatus.claude?.connected === true || ticked.claude === true;
+  const piHeld = (a: AgentInfo) => a.id === "pi" && claudeGlobalActive && projectResults.pi?.ok !== true;
+  const projectPicked = pickedAgents.filter((a) => !a.global && a.connect === "auto" && !piHeld(a));
+  const projectPending = projectPicked.filter((a) => projectResults[a.id]?.ok !== true);
+  const projectFiles = Array.from(new Set(projectPending.map((a) => a.file))).join(" and ");
+  const projectWriteNotice = projectPending.length > 0
+    ? `${registeredId ? "Continuing" : "Registering"} also adds Nexus to ${projectFiles} in this folder for ${projectPending.map((a) => a.name).join(", ")}. A backup is kept if the file already exists.`
+    : null;
+  // Claude Code reads .mcp.json, so a project entry written for Pi brings its trust prompt back even when Claude is connected globally.
+  const claudeSeesProjectEntry = projectResults.claude?.ok === true || projectResults.pi?.ok === true;
   const hintAgent = pickedAgents.find((a) => !a.global) ?? pickedAgents[0] ?? null;
   const agentLabel = pickedAgents.length === 1 ? pickedAgents[0].name : "your agent";
   const callerName = liveCall ? agentDisplayName(liveCall.agent ?? agentLabel) : agentLabel;
   const connectedAgents = agents.filter((a) => (a.global ? globalStatus[a.id]?.connected === true : projectResults[a.id]?.ok === true));
   const connectedAny = connectedAgents.length > 0;
-  const configPaths = globalPicked.map((a) => globalStatus[a.id]?.config_path).filter((p): p is string => !!p);
 
   // Spot an existing Nexus project in the chosen folder and offer to reuse its name.
   useEffect(() => {
@@ -251,7 +261,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
   async function runSetupChecks() {
     if (!project) return;
     if (!desktop) { setTestError("Open the desktop app to run the check."); return; }
-    const targets = pickedAgents.filter((a) => a.connect === "auto");
+    const targets = pickedAgents.filter((a) => a.connect === "auto" && !piHeld(a));
     if (targets.length === 0) return;
     setTesting(true); setTestError("");
     try {
@@ -381,10 +391,13 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
                 </ul>
 
                 {globalPicked.length > 0 && (
-                  <p className="text-[12px] leading-[1.55] text-(--muted)">
-                    This adds one entry to <span className="nx-mono">{configPaths.length > 0 ? configPaths.join(" and ") : "your user config"}</span> (a backup is kept). Remove it any time from Agents.
-                  </p>
+                  <ul className="flex flex-col gap-1.5 text-[12px] leading-[1.55] text-(--muted)" aria-label="What will change">
+                    {globalPicked.map((a) => (
+                      <li key={a.id}><strong className="font-medium text-(--text)">{a.name}.</strong> {globalChangeText(a.id, globalStatus[a.id]?.config_path)}</li>
+                    ))}
+                  </ul>
                 )}
+                {registeredId && projectWriteNotice && <p className="text-[12px] leading-[1.55] text-(--muted)">{projectWriteNotice}</p>}
                 <div className="flex flex-wrap items-center gap-3">
                   <Button size="sm" isDisabled={!desktop || globalPicked.length === 0 || connectingGlobal} onPress={() => void connectGlobal()}>
                     {connectingGlobal ? "Connecting…" : `Connect ${globalPicked.length} ${globalPicked.length === 1 ? "agent" : "agents"}`}
@@ -418,9 +431,7 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
                   <input value={name} onChange={(e) => { setName(e.target.value); setNameTouched(true); setError(""); }} placeholder="Koupa" disabled={!!registeredId} className={inputClass} />
                   {nameUsed && <span className="text-[12px] text-(--red)" role="alert">A project with this name already exists.</span>}
                 </label>
-                {projectPicked.length > 0 && (
-                  <p className="text-[12px] leading-[1.55] text-(--muted)">Nexus also sets up {projectPicked.map((a) => a.name).join(", ")} in this folder when you continue.</p>
-                )}
+                {projectWriteNotice && <p className="text-[12px] leading-[1.55] text-(--muted)">{projectWriteNotice}</p>}
                 {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
               </div>
             )}
@@ -459,15 +470,22 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
                               <span className="nx-mono text-[12px] text-(--muted)">{project.path}</span>
                             </TickRow>
                           )}
+                          {a.id === "claude" && claudeSeesProjectEntry && a.trustPrompt && (
+                            <TickRow ticked={!!ticks[`${a.id}:trust`]} onToggle={() => toggleTick(`${a.id}:trust`)}>
+                              <span className="text-[13px] text-(--text)">{emphasizeChoice(a.trustPrompt)}</span>
+                              <span className="text-[12px] text-(--muted)">If you skip this, the agent never connects.</span>
+                            </TickRow>
+                          )}
                         </Fragment>
                       );
                     }
 
-                    if (a.connect === "manual") {
+                    if (a.connect === "manual" || piHeld(a)) {
                       const snippet = project ? manualSnippet(a.id, project.path) : "";
                       return (
                         <TickRow key={a.id} ticked={!!ticks[`${a.id}:snippet`]} onToggle={() => toggleTick(`${a.id}:snippet`)}>
-                          <span className="text-[13px] text-(--text)">Add the snippet to <span className="nx-mono">{a.file}</span></span>
+                          <span className="text-[13px] text-(--text)">{piHeld(a) ? `${a.name} is not set up yet` : <>Add the snippet to <span className="nx-mono">{a.file}</span></>}</span>
+                          {piHeld(a) && <span className="text-[12px] leading-[1.55] text-(--muted)">{PI_SHARED_FILE_WARNING}</span>}
                           {snippet && (
                             <span className="flex flex-col gap-2">
                               <pre className="nx-mono overflow-x-auto rounded-[10px] bg-(--raised) p-3 text-[12px] leading-[1.55] text-(--text)">{snippet}</pre>
@@ -564,8 +582,16 @@ export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAd
 
           <div className="mt-4 flex shrink-0 items-center justify-between gap-2 border-t border-(--line-soft) pt-3">
             {step === 0 ? <span className="min-w-0 flex-1 text-[11.5px] text-(--muted)">{connectedAny ? "" : "Connect an agent now, or set it up later."}</span> : <Button size="sm" variant="ghost" onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>}
-            {step === 0 && <Button size="sm" variant={connectedAny ? "primary" : "outline"} isDisabled={connectingGlobal} onPress={() => setStep(1)}>{connectedAny ? "Continue" : "Skip this step"}</Button>}
-            {step === 1 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
+            {step === 0 && (
+              <Button size="sm" variant={connectedAny || registeredId ? "primary" : "outline"} isDisabled={connectingGlobal} onPress={() => (registeredId ? void register() : setStep(1))}>
+                {registeredId ? (projectPending.length > 0 ? "Continue and add Nexus" : "Continue") : connectedAny ? "Continue" : "Skip this step"}
+              </Button>
+            )}
+            {step === 1 && (
+              <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>
+                {registeredId ? (projectPending.length > 0 ? "Continue and add Nexus" : "Continue") : projectPending.length > 0 ? "Register and add Nexus" : "Register project"}
+              </Button>
+            )}
             {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish later"}</Button>}
           </div>
         </section>

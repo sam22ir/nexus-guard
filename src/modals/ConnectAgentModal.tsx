@@ -4,7 +4,7 @@ import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "../onboarding";
 import { type AgentConfigEdit, type AgentTestStep, type GlobalAgentStatus } from "../app/types";
-import { AGENTS, agentById, errorText, manualSnippet } from "../agents";
+import { AGENTS, PI_SHARED_FILE_WARNING, agentById, errorText, globalChangeText, manualSnippet } from "../agents";
 import { Button } from "@heroui/react";
 import { Icon as NxIcon, Segmented } from "../ui";
 import { Modal } from "../app/common";
@@ -21,6 +21,9 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
   const [scope, setScope] = useState<Scope>(agent.global ? "global" : "project");
   const [globalStatus, setGlobalStatus] = useState<GlobalAgentStatus | null>(null);
   const [globalError, setGlobalError] = useState("");
+  // Claude Code reads the same .mcp.json as Pi, so a global Claude entry changes what writing Pi does.
+  const [claudeGlobal, setClaudeGlobal] = useState(false);
+  const [piAck, setPiAck] = useState(false);
   const [copied, setCopied] = useState("");
   const [busy, setBusy] = useState(false);
   const [writtenEdit, setWrittenEdit] = useState<AgentConfigEdit | null>(null);
@@ -42,10 +45,13 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
 
   // Whether the agent already has the one user-level entry. Re-read whenever the agent changes.
   useEffect(() => {
-    if (!desktop || !agent.global) { setGlobalStatus(null); return; }
+    if (!desktop) { setGlobalStatus(null); setClaudeGlobal(false); return; }
     invoke<GlobalAgentStatus[]>("global_agent_status")
-      .then((list) => setGlobalStatus(list.find((s) => s.agent_id === agentId) ?? null))
-      .catch(() => setGlobalStatus(null));
+      .then((list) => {
+        setGlobalStatus(agent.global ? (list.find((s) => s.agent_id === agentId) ?? null) : null);
+        setClaudeGlobal(list.find((s) => s.agent_id === "claude")?.connected === true);
+      })
+      .catch(() => { setGlobalStatus(null); setClaudeGlobal(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, desktop]);
 
@@ -57,7 +63,7 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
     const next = agentById(id);
     setAgentId(id);
     setScope(next?.global ? "global" : "project");
-    setSteps([]); setWrittenEdit(null); setError(""); setGlobalError("");
+    setSteps([]); setWrittenEdit(null); setError(""); setGlobalError(""); setPiAck(false);
   }
 
   async function connectGlobal() {
@@ -105,6 +111,8 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
   const allOk = steps.length > 0 && steps.every((s) => s.ok);
   const nextStep = allOk ? `All checks pass. ${agent.restart}` : `Then ${restartLower}`;
   const alreadyGlobal = agent.global && globalStatus?.connected === true;
+  const piShadow = agentId === "pi" && claudeGlobal;
+  const globalChange = globalChangeText(agentId, globalStatus?.config_path);
   const footerNote = isGlobal
     ? (alreadyGlobal ? `Connected for all projects. ${agent.globalRestart ?? ""}` : "Connect once to finish.")
     : nextStep;
@@ -140,6 +148,7 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
                     ? <>Adds one Nexus entry to <span className="nx-mono">{globalStatus.config_path}</span> (a backup is kept). Every project and every new session picks it up.</>
                     : <>Adds one Nexus entry to {agent.name}&apos;s user config (a backup is kept). Every project and every new session picks it up.</>}
                 </p>
+                {globalChange && <p className="mt-1.5 text-[12px] leading-[1.55] text-(--muted)">{globalChange}</p>}
                 <div className="mt-2.5 flex flex-wrap items-center gap-3">
                   <Button size="sm" isDisabled={busy || !desktop} onPress={() => void connectGlobal()}>{busy ? "Connecting…" : `Connect ${agent.name} once`}</Button>
                   <span className="text-[12px] text-(--muted)">{desktop ? "Once for all your projects." : "Needs the desktop app."}</span>
@@ -164,9 +173,18 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
           <section className="rounded-[12px] border border-(--line) px-3.5 py-3">
             <div className="mb-1.5 flex items-center gap-2">{numberDot(1)}<strong className="text-[13px] font-medium text-(--text)">Let Nexus write it</strong></div>
             <p className="text-[12px] leading-[1.55] text-(--muted)">Edits <span className="nx-mono">{agent.file}</span> in {project.path}. Keeps your other servers and backs the file up first.</p>
-            {agent.note && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{agent.note}</p>}
+            {agent.note && !piShadow && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{agent.note}</p>}
+            {piShadow && (
+              <div className="mt-2 rounded-[10px] bg-(--orange-bg) px-3 py-2 text-[12px] leading-[1.55] text-(--orange)" role="alert">
+                <p>{PI_SHARED_FILE_WARNING}</p>
+                <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-(--text)">
+                  <input type="checkbox" className="size-4 shrink-0 accent-(--text)" checked={piAck} onChange={() => setPiAck((v) => !v)} />
+                  I understand
+                </label>
+              </div>
+            )}
             <div className="mt-2.5 flex flex-wrap items-center gap-3">
-              <Button size="sm" isDisabled={busy || !desktop} onPress={() => void writeConfig()}>{busy && !writtenEdit ? "Writing…" : `Connect ${agent.name}`}</Button>
+              <Button size="sm" isDisabled={busy || !desktop || (piShadow && !piAck)} onPress={() => void writeConfig()}>{busy && !writtenEdit ? "Writing…" : piShadow ? "Write it anyway" : `Connect ${agent.name}`}</Button>
               <span className="text-[12px] text-(--muted)">{desktop ? "You confirm before anything is written." : "Needs the desktop app."}</span>
             </div>
             {writtenEdit && (

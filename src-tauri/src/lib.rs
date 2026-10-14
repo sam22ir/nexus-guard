@@ -1243,26 +1243,6 @@ fn scan_project_mcp(workspace_path: String) -> Result<Vec<UnmanagedMcpEntry>, St
     Ok(out)
 }
 
-fn executable_in_path(name: &str) -> bool {
-    let Some(path_var) = env::var_os("PATH") else {
-        return false;
-    };
-    // Windows finds `claude` as claude.cmd or claude.exe, so try each PATHEXT.
-    let extensions: Vec<String> = if cfg!(windows) {
-        env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
-            .split(';')
-            .filter(|ext| !ext.is_empty())
-            .map(|ext| ext.to_ascii_lowercase())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    env::split_paths(&path_var).any(|dir| {
-        dir.join(name).is_file() || extensions.iter().any(|ext| dir.join(format!("{name}{ext}")).is_file())
-    })
-}
-
 /// Detect installed coding agents by CLI presence and known config paths.
 /// Detection is not routing: an agent only goes through Nexus when its own MCP
 /// config points at the Nexus bridge for that project folder.
@@ -2618,10 +2598,8 @@ fn opencode_remove_at(path: &std::path::Path) -> Result<String, String> {
     save_opencode_document(path, &document)
 }
 
-/// Full path of an executable on PATH (PATHEXT-aware on Windows).
-fn find_executable(name: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
+fn pathext_list() -> Vec<String> {
+    if cfg!(windows) {
         env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
             .split(';')
@@ -2630,13 +2608,62 @@ fn find_executable(name: &str) -> Option<PathBuf> {
             .collect()
     } else {
         Vec::new()
-    };
-    for dir in env::split_paths(&path_var) {
+    }
+}
+
+/// Extra places a CLI may live when a GUI-launched app has no shell PATH:
+/// the usual Claude Code / npm / Homebrew installs and Node version managers.
+fn extra_cli_dirs(home: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut managed: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join(".claude").join("local"));
+        dirs.push(home.join(".claude").join("local").join("node_modules").join(".bin"));
+        dirs.push(home.join(".volta").join("bin"));
+        dirs.push(home.join(".asdf").join("shims"));
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join(".npm-global").join("bin"));
+        managed.push(home.join(".nvm").join("versions").join("node"));
+        managed.push(home.join(".local").join("share").join("fnm").join("node-versions"));
+        managed.push(home.join("Library").join("Application Support").join("fnm").join("node-versions"));
+    }
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        dirs.push(PathBuf::from(dir));
+    }
+    if let Some(roaming) = env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(&roaming).join("npm"));
+        managed.push(PathBuf::from(roaming).join("fnm").join("node-versions"));
+    }
+    if let Some(local) = env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("Volta").join("bin"));
+    }
+    if let Some(link) = env::var_os("NVM_SYMLINK") {
+        dirs.push(PathBuf::from(link));
+    }
+    for root in managed {
+        if let Ok(entries) = fs::read_dir(&root) {
+            let mut versions: Vec<PathBuf> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).collect();
+            versions.sort();
+            versions.reverse();
+            for version in versions {
+                dirs.push(version.join("bin"));
+                dirs.push(version.join("installation").join("bin"));
+                dirs.push(version.join("installation"));
+            }
+        }
+    }
+    dirs
+}
+
+/// Look for `name` in the given directories, in order (PATHEXT-aware on Windows).
+fn find_in_dirs(name: &str, dirs: impl IntoIterator<Item = PathBuf>, extensions: &[String]) -> Option<PathBuf> {
+    for dir in dirs {
         let direct = dir.join(name);
         if direct.is_file() {
             return Some(direct);
         }
-        for ext in &extensions {
+        for ext in extensions {
             let candidate = dir.join(format!("{name}{ext}"));
             if candidate.is_file() {
                 return Some(candidate);
@@ -2644,6 +2671,14 @@ fn find_executable(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The one shared lookup for agent CLIs: PATH first, then the usual install
+/// locations. Status ("installed") and connect both use this so they agree.
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = env::var_os("PATH").map(|path| env::split_paths(&path).collect()).unwrap_or_default();
+    dirs.extend(extra_cli_dirs(home_dir().as_deref()));
+    find_in_dirs(name, dirs, &pathext_list())
 }
 
 fn global_status_in(agent_id: &str, env: &GlobalEnv, port: &str, binary_found: bool) -> Result<GlobalAgentStatus, String> {
@@ -2682,11 +2717,11 @@ fn global_status_in(agent_id: &str, env: &GlobalEnv, port: &str, binary_found: b
 fn global_agent_status_for(agent_id: &str) -> Result<GlobalAgentStatus, String> {
     let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
     let port = nexus_http_port(&default_nexus_http_url());
-    global_status_in(agent_id, &env, &port, executable_in_path(agent_id))
+    global_status_in(agent_id, &env, &port, find_executable(agent_id).is_some())
 }
 
 /// Global-mode status for the agents that declare MCP roots.
-#[tauri::command]
+#[tauri::command(async)]
 fn global_agent_status() -> Vec<GlobalAgentStatus> {
     GLOBAL_AGENT_IDS
         .iter()
@@ -2694,19 +2729,83 @@ fn global_agent_status() -> Vec<GlobalAgentStatus> {
         .collect()
 }
 
+const CLAUDE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Run a prepared command with null stdin, captured output and a hard timeout.
+/// Ok(true) = exited successfully, Ok(false) = exited non-zero, Err(()) = timed out
+/// (the child is killed) or could not start.
+fn run_with_timeout(mut command: std::process::Command, timeout: std::time::Duration) -> Result<bool, RunFailure> {
+    use std::process::Stdio;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|_| RunFailure::Start)?;
+    // Drain the pipes so a chatty child cannot block on a full buffer.
+    let drains: Vec<thread::JoinHandle<()>> = [
+        child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+        child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|mut pipe| {
+        thread::spawn(move || {
+            let mut sink = Vec::new();
+            let _ = pipe.read_to_end(&mut sink);
+        })
+    })
+    .collect();
+    let deadline = std::time::Instant::now() + timeout;
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status.success()),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(RunFailure::TimedOut);
+                }
+                thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(RunFailure::Start);
+            }
+        }
+    };
+    for drain in drains {
+        let _ = drain.join();
+    }
+    outcome
+}
+
+#[derive(Debug, PartialEq)]
+enum RunFailure {
+    Start,
+    TimedOut,
+}
+
 fn run_claude(binary: &std::path::Path, args: &[String]) -> Result<(), String> {
-    let output = background_command(binary)
-        .args(args)
-        .output()
-        .map_err(|_| "Nexus could not run Claude Code. Check that `claude` works in a terminal and try again.".to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err("Claude Code refused the change. Run `claude mcp list` in a terminal to see why.".to_string())
+    run_claude_with(args, CLAUDE_TIMEOUT, || {
+        let mut command = background_command(binary);
+        command.args(args);
+        command
+    })
+}
+
+fn run_claude_with(args: &[String], timeout: std::time::Duration, make: impl FnOnce() -> std::process::Command) -> Result<(), String> {
+    match run_with_timeout(make(), timeout) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Claude Code refused the change. Run `claude mcp list` in a terminal to see why.".to_string()),
+        Err(RunFailure::TimedOut) => Err(format!(
+            "Claude Code did not finish. Try again, or run: claude {}",
+            args.join(" ")
+        )),
+        Err(RunFailure::Start) => {
+            Err("Nexus could not run Claude Code. Check that `claude` works in a terminal and try again.".to_string())
+        }
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn connect_agent_globally(agent_id: String, http_url: Option<String>) -> Result<GlobalAgentStatus, String> {
     let url = bare_global_url(http_url)?;
     let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
@@ -2727,13 +2826,13 @@ fn connect_agent_globally(agent_id: String, http_url: Option<String>) -> Result<
         }
         "opencode" => {
             opencode_connect_at(&env.opencode_config(), &url)?;
-            global_status_in("opencode", &env, &port, executable_in_path("opencode"))
+            global_status_in("opencode", &env, &port, find_executable("opencode").is_some())
         }
         _ => Err("Global mode supports Claude Code and OpenCode.".to_string()),
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_global_agent_entry(agent_id: String) -> Result<GlobalAgentStatus, String> {
     let env = GlobalEnv::from_env().ok_or_else(|| "Nexus could not find your home folder.".to_string())?;
     let port = nexus_http_port(&default_nexus_http_url());
@@ -2754,7 +2853,7 @@ fn remove_global_agent_entry(agent_id: String) -> Result<GlobalAgentStatus, Stri
         }
         "opencode" => {
             opencode_remove_at(&env.opencode_config())?;
-            global_status_in("opencode", &env, &port, executable_in_path("opencode"))
+            global_status_in("opencode", &env, &port, find_executable("opencode").is_some())
         }
         _ => Err("Global mode supports Claude Code and OpenCode.".to_string()),
     }
@@ -2792,7 +2891,7 @@ fn detect_agents() -> Vec<DetectedAgent> {
     candidates
         .iter()
         .map(|(id, name, binaries, configs, nexus_config)| {
-            let binary = binaries.iter().any(|name| executable_in_path(name));
+            let binary = binaries.iter().any(|name| find_executable(name).is_some());
             let config = configs.iter().find(|path| has_config(path)).map(|path| path.to_string());
             let found = binary || config.is_some();
             let mut parts = Vec::new();
@@ -4725,6 +4824,65 @@ mod agent_setup_tests {
         assert_eq!(opencode_remove_at(&path).unwrap(), "");
         assert!(!path.exists());
         fs::remove_dir_all(&env.home).ok();
+    }
+
+    #[test]
+    fn run_with_timeout_kills_a_slow_child_and_reports_it() {
+        let started = std::time::Instant::now();
+        let args = vec!["mcp".to_string(), "add".to_string(), "x".to_string()];
+        let result = run_claude_with(&args, std::time::Duration::from_millis(300), || {
+            let mut command = std::process::Command::new(if cfg!(windows) { "ping" } else { "sleep" });
+            if cfg!(windows) {
+                command.args(["-n", "30", "127.0.0.1"]);
+            } else {
+                command.arg("30");
+            }
+            command
+        });
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        let message = result.unwrap_err();
+        assert!(message.starts_with("Claude Code did not finish."), "{message}");
+        assert!(message.contains("claude mcp add x"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_with_timeout_reports_success_and_failure() {
+        assert_eq!(run_with_timeout(std::process::Command::new("true"), std::time::Duration::from_secs(5)), Ok(true));
+        assert_eq!(run_with_timeout(std::process::Command::new("false"), std::time::Duration::from_secs(5)), Ok(false));
+        assert_eq!(
+            run_with_timeout(std::process::Command::new("/definitely/not/here"), std::time::Duration::from_secs(5)),
+            Err(RunFailure::Start)
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn claude_lookup_checks_install_locations_and_prefers_path() {
+        let home = unique_dir("nexus-find-home");
+        let ext = pathext_list();
+        assert!(find_in_dirs("claude-x", extra_cli_dirs(Some(&home)).into_iter().filter(|d| d.starts_with(&home)), &ext).is_none());
+        let local = home.join(".local").join("bin");
+        fs::create_dir_all(&local).unwrap();
+        fs::write(local.join("claude-x"), "").unwrap();
+        let found = find_in_dirs("claude-x", extra_cli_dirs(Some(&home)), &ext).unwrap();
+        assert_eq!(found, local.join("claude-x"));
+        // nvm: newest version dir wins.
+        let nvm_old = home.join(".nvm/versions/node/v18.0.0/bin");
+        let nvm_new = home.join(".nvm/versions/node/v20.1.0/bin");
+        fs::create_dir_all(&nvm_old).unwrap();
+        fs::create_dir_all(&nvm_new).unwrap();
+        fs::write(nvm_old.join("claude-y"), "").unwrap();
+        fs::write(nvm_new.join("claude-y"), "").unwrap();
+        assert_eq!(find_in_dirs("claude-y", extra_cli_dirs(Some(&home)), &ext).unwrap(), nvm_new.join("claude-y"));
+        // An explicit PATH dir listed first wins over install locations.
+        let path_dir = home.join("pathdir");
+        fs::create_dir_all(&path_dir).unwrap();
+        fs::write(path_dir.join("claude-x"), "").unwrap();
+        let mut dirs = vec![path_dir.clone()];
+        dirs.extend(extra_cli_dirs(Some(&home)));
+        assert_eq!(find_in_dirs("claude-x", dirs, &ext).unwrap(), path_dir.join("claude-x"));
+        fs::remove_dir_all(&home).ok();
     }
 
     #[test]

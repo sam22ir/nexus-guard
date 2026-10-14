@@ -4,7 +4,7 @@ import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "../onboarding";
 import { agentDisplayName } from "../topology";
-import { agentById, errorText } from "../agents";
+import { agentById, errorText, globalChangeText } from "../agents";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
 import { type AgentConfigEdit, type UnmanagedMcpEntry, type DetectedAgent, type GlobalAgentStatus } from "../app/types";
@@ -269,7 +269,8 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
                                 {connectedGlobal && <Button size="sm" variant="danger-soft" isDisabled={!desktop || globalBusy !== null} onPress={() => void removeOnce(current.id, current.name)}>{globalBusy === current.id ? "Removing…" : "Remove"}</Button>}
                               </span>
                             </div>
-                            {globalMsg[current.id] && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{globalMsg[current.id]}</p>}
+                            {!connectedGlobal && globalChangeText(current.id, globalStatus[current.id]?.config_path) && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{globalChangeText(current.id, globalStatus[current.id]?.config_path)}</p>}
+                            {globalMsg[current.id] &&<p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{globalMsg[current.id]}</p>}
                             {connectedGlobal && !current.http_reachable && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--orange)">Nexus only runs while this app is open, so {current.name} shows a failed nexus server until you reopen it.</p>}
                           </div>
                         );
