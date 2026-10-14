@@ -131,7 +131,8 @@ export function nexusHttpUrlFor(workspace: string) {
   return `${NEXUS_HTTP_URL}?workspace=${encodeURIComponent(trimmed)}`;
 }
 export function claudeHttpCommand(workspace: string) {
-  return `claude mcp add --transport http nexus "${nexusHttpUrlFor(workspace)}"`;
+  // The CLI defaults to `local` scope (kept in ~/.claude.json), which the setup check, which reads the project's .mcp.json, cannot see.
+  return `claude mcp add --scope project --transport http nexus "${nexusHttpUrlFor(workspace)}"`;
 }
 export function codexHttpCommand(workspace: string) {
   return `codex mcp add nexus --url "${nexusHttpUrlFor(workspace)}"`;

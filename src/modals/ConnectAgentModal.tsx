@@ -4,38 +4,34 @@ import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "../onboarding";
 import { type AgentConfigEdit, type AgentTestStep } from "../app/types";
+import { AGENTS, agentById, manualSnippet } from "../agents";
 import { Button } from "@heroui/react";
 import { Icon as NxIcon, Segmented } from "../ui";
 import { Modal } from "../app/common";
 
-const AGENTS = [
-  { id: "claude", name: "Claude Code", file: ".mcp.json" },
-  { id: "codex", name: "Codex", file: ".codex/config.toml" },
-  { id: "opencode", name: "OpenCode", file: "opencode.json" },
-  { id: "pi", name: "Pi", file: ".mcp.json" },
-  { id: "other", name: "Other", file: "your agent's MCP config" },
-] as const;
-
-/** Connect one agent to one project over the single Nexus HTTP endpoint:
- *  run the agent's own command, or let Nexus write the entry (confirm, diff,
- *  backup), then check the connection. No stdio bridges (paper §6, §8). */
+/** Connect one agent to one project over the single Nexus HTTP endpoint.
+ *  Agents with a native writer get a write button (confirm, diff, backup);
+ *  the rest get a snippet to paste. Then the connection is checked. No stdio bridges (paper §6, §8). */
 export function ConnectAgentModal({ project, initialAgentId, onClose }: { project: Project; initialAgentId: string | null; onClose: () => void }) {
-  const [agentId, setAgentId] = useState<string>(AGENTS.some((a) => a.id === initialAgentId) ? (initialAgentId as string) : "claude");
+  const [agentId, setAgentId] = useState<string>(agentById(initialAgentId) ? (initialAgentId as string) : AGENTS[0].id);
   const [copied, setCopied] = useState("");
   const [busy, setBusy] = useState(false);
   const [writtenEdit, setWrittenEdit] = useState<AgentConfigEdit | null>(null);
   const [steps, setSteps] = useState<AgentTestStep[]>([]);
   const [error, setError] = useState("");
   const desktop = desktopAvailable();
-  const agent = AGENTS.find((a) => a.id === agentId) ?? AGENTS[0];
-  const isManual = agentId === "other";
+  const agent = agentById(agentId) ?? AGENTS[0];
+  const isManual = agent.connect === "manual";
   const httpUrl = nexusHttpUrlFor(project.path);
+  const restartLower = agent.restart.charAt(0).toLowerCase() + agent.restart.slice(1);
 
-  const command = agentId === "claude" ? claudeHttpCommand(project.path) : agentId === "codex" ? codexHttpCommand(project.path) : httpUrl;
-  const commandNote = agentId === "claude" || agentId === "codex"
-    ? "Uses the agent's own CLI, so it keeps its validation."
-    : "No official command. Point the agent's MCP config at this URL.";
-  const manualJson = JSON.stringify({ mcpServers: { nexus: { type: "http", url: httpUrl, headers: { "X-Nexus-Workspace": project.path } } } }, null, 2);
+  const cliCommand = agentId === "claude" ? claudeHttpCommand(project.path) : agentId === "codex" ? codexHttpCommand(project.path) : httpUrl;
+  const commandNote = agentId === "claude"
+    ? "Adds the entry to .mcp.json in this project, the same file Nexus writes."
+    : agentId === "codex"
+      ? "Codex's own command may save to your user config instead of this project, so the check here might not see it."
+      : "No official command. Point the agent's MCP config at this URL.";
+  const snippet = manualSnippet(agentId, project.path);
 
   function copyText(kind: string, text: string) {
     if (!navigator.clipboard?.writeText) return;
@@ -72,41 +68,33 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
   }
 
   const allOk = steps.length > 0 && steps.every((s) => s.ok);
-  const anyFail = steps.some((s) => !s.ok);
+  const nextStep = allOk ? `All checks pass. ${agent.restart}` : `Then ${restartLower}`;
   const numberDot = (n: number) => <span className="nx-tile text-[11px] font-semibold" style={{ width: 22, height: 22, borderRadius: 9999 }} aria-hidden="true">{n}</span>;
 
   return (
-    <Modal title={`Connect ${agent.name} to ${project.name}`} description="Adds one Nexus entry over HTTP, bound to this project." onClose={onClose}>
+    <Modal title={`Connect ${agent.name} to ${project.name}`} description="Adds Nexus to this project's agent config." onClose={onClose}>
       <div className="flex flex-col gap-3">
         <Segmented label="Agent" value={agentId} onChange={pickAgent} options={AGENTS.map((a) => ({ value: a.id, label: a.name }))} />
 
-        <section className="rounded-[12px] border border-(--line) px-3.5 py-3">
-          <div className="mb-2 flex items-center gap-2">{numberDot(1)}<strong className="text-[13px] font-medium text-(--text)">{isManual ? "Add this to your agent's MCP config" : "Run this command"}</strong><span className="ml-auto text-[11.5px] text-(--muted-2)">{isManual ? "Manual" : "Preferred"}</span></div>
-          {isManual ? (
-            <div className="rounded-[10px] bg-(--raised) px-3 py-2">
-              <pre className="nx-mono m-0 overflow-x-auto whitespace-pre text-(--text)">{manualJson}</pre>
-              <div className="mt-1 flex items-center justify-between gap-3 text-[11.5px] text-(--muted)">
-                <span>Launch the agent in {project.path} so it resolves this project.</span>
-                <Button size="sm" variant="outline" onPress={() => copyText("json", manualJson)}>{copied === "json" ? "Copied" : "Copy"}</Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
-                <span className="nx-mono min-w-0 flex-1 break-all text-(--text)" style={{ whiteSpace: "normal" }}>{command}</span>
-                <Button size="sm" variant="outline" onPress={() => copyText("cmd", command)}>{copied === "cmd" ? "Copied" : "Copy"}</Button>
-              </div>
-              <p className="mt-1.5 text-[11.5px] text-(--muted)">{commandNote}</p>
-            </>
-          )}
-        </section>
-
-        {!isManual && (
+        {isManual ? (
           <section className="rounded-[12px] border border-(--line) px-3.5 py-3">
-            <div className="mb-1.5 flex items-center gap-2">{numberDot(2)}<strong className="text-[13px] font-medium text-(--text)">Or let Nexus write it</strong></div>
+            <div className="mb-2 flex items-center gap-2">{numberDot(1)}<strong className="text-[13px] font-medium text-(--text)">Add it by hand</strong></div>
+            <p className="mb-2 text-[12px] leading-[1.55] text-(--muted)">Add this to <span className="nx-mono">{agent.file}</span> in your project folder:</p>
+            <div className="rounded-[10px] bg-(--raised) px-3 py-2">
+              <pre className="nx-mono m-0 overflow-x-auto whitespace-pre text-(--text)">{snippet}</pre>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3 text-[12px] text-(--muted)">
+              <span>Then {restartLower}</span>
+              <Button size="sm" variant="outline" onPress={() => copyText("json", snippet)}>{copied === "json" ? "Copied" : "Copy"}</Button>
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-[12px] border border-(--line) px-3.5 py-3">
+            <div className="mb-1.5 flex items-center gap-2">{numberDot(1)}<strong className="text-[13px] font-medium text-(--text)">Let Nexus write it</strong></div>
             <p className="text-[12px] leading-[1.55] text-(--muted)">Edits <span className="nx-mono">{agent.file}</span> in {project.path}. Keeps your other servers and backs the file up first.</p>
+            {agent.note && <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{agent.note}</p>}
             <div className="mt-2.5 flex flex-wrap items-center gap-3">
-              <Button size="sm" isDisabled={busy || !desktop} onPress={() => void writeConfig()}>{busy && !writtenEdit ? "Writing…" : writtenEdit ? "Write again" : "Write config"}</Button>
+              <Button size="sm" isDisabled={busy || !desktop} onPress={() => void writeConfig()}>{busy && !writtenEdit ? "Writing…" : `Connect ${agent.name}`}</Button>
               <span className="text-[12px] text-(--muted)">{desktop ? "You confirm before anything is written." : "Needs the desktop app."}</span>
             </div>
             {writtenEdit && (
@@ -118,12 +106,22 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
           </section>
         )}
 
+        {(agentId === "claude" || agentId === "codex") && (
+          <details className="rounded-[12px] border border-(--line) px-3.5 py-2.5">
+            <summary className="cursor-pointer text-[12.5px] font-medium text-(--text)">Advanced: run the agent's own command</summary>
+            <div className="mt-2.5 flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
+              <span className="nx-mono min-w-0 flex-1 break-all text-(--text)" style={{ whiteSpace: "normal" }}>{cliCommand}</span>
+              <Button size="sm" variant="outline" onPress={() => copyText("cmd", cliCommand)}>{copied === "cmd" ? "Copied" : "Copy"}</Button>
+            </div>
+            <p className="mt-1.5 text-[11.5px] leading-[1.5] text-(--muted)">{commandNote}</p>
+          </details>
+        )}
+
         <section className="rounded-[12px] border border-(--line) px-3.5 py-3">
           <div className="mb-1.5 flex items-center gap-2">
-            {numberDot(isManual ? 2 : 3)}<strong className="text-[13px] font-medium text-(--text)">Check the connection</strong>
+            {numberDot(2)}<strong className="text-[13px] font-medium text-(--text)">Check the connection</strong>
             <span className="ml-auto flex gap-2">
-              {anyFail && <Button size="sm" variant="outline" isDisabled={busy || !desktop} onPress={() => void runChecks()}>{busy ? "Retrying…" : "Retry failed"}</Button>}
-              {!anyFail && <Button size="sm" variant="outline" isDisabled={busy || !desktop} onPress={() => void runChecks()}>{busy && steps.length === 0 ? "Checking…" : steps.length ? "Run again" : "Run checks"}</Button>}
+              <Button size="sm" variant="outline" isDisabled={busy || !desktop} onPress={() => void runChecks()}>{busy ? "Checking…" : steps.length ? "Run again" : "Run checks"}</Button>
             </span>
           </div>
           {steps.length === 0 ? (
@@ -138,14 +136,15 @@ export function ConnectAgentModal({ project, initialAgentId, onClose }: { projec
               ))}
             </ul>
           )}
+          {agent.trustPrompt && (
+            <p className="mt-2.5 rounded-[10px] bg-(--raised) px-3 py-2 text-[12px] leading-[1.55] text-(--text)">One more step: {agent.trustPrompt}</p>
+          )}
         </section>
 
         {error && <p className="text-[12px] text-(--red)" role="alert">{error}</p>}
 
         <div className="flex items-center gap-3">
-          <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">
-            {allOk ? `All checks pass. Restart ${agent.name} in the project folder and its calls show up in Activity.` : `Then restart ${agent.name} in the project folder. Its calls show up in Activity.`}
-          </span>
+          <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">{nextStep} Its calls show up in Activity.</span>
           <Button size="sm" variant="outline" isDisabled={busy} onPress={onClose}>Close</Button>
         </div>
       </div>

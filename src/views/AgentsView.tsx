@@ -4,6 +4,7 @@ import { desktopAvailable } from "../keychain";
 import { type Project } from "../store";
 import { nexusHttpUrlFor, claudeHttpCommand, codexHttpCommand } from "../onboarding";
 import { agentDisplayName } from "../topology";
+import { agentById } from "../agents";
 import { Button } from "@heroui/react";
 import { Badge, Empty, Icon as NxIcon, type Tone } from "../ui";
 import { type AgentConfigEdit, type UnmanagedMcpEntry, type DetectedAgent } from "../app/types";
@@ -49,7 +50,7 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
   }
   async function importEntry(agentId: string, entry: UnmanagedMcpEntry) {
     if (!cliProject) return;
-    if (!window.confirm(`Import “${entry.name}” (${entry.source}) onto Nexus for “${cliProject.name}”?\n\nNexus backs up the agent config first, then points this entry at the workspace-bound HTTP URL. Unknown entries are never silently re-routed.`)) return;
+    if (!window.confirm(`Import “${entry.name}” (${entry.source}) onto Nexus for “${cliProject.name}”?\n\nNexus backs up the agent config first, then points this entry at Nexus for this project. Unknown entries are never silently re-routed.`)) return;
     setEntryBusy(`${agentId}:${entry.name}:import`); setEntryMsg((m) => ({ ...m }));
     try {
       const edit = await invoke<AgentConfigEdit>("import_agent_entry", { workspacePath: cliProject.path, agentId, name: entry.name, url: boundHttpUrl });
@@ -115,8 +116,9 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
   const statusOf = (agent: DetectedAgent): { tone: Tone; label: string; sub: string } => {
     const direct = directFor(agent).length;
     const seen = seenBy(agent);
-    if (direct > 0) return { tone: "warning", label: "Unmanaged", sub: `${direct} direct ${direct === 1 ? "entry bypasses" : "entries bypass"} Nexus` };
+    if (direct > 0) return { tone: "warning", label: "Without Nexus", sub: `${direct} ${direct === 1 ? "entry" : "entries"} set up without Nexus` };
     if (seen.calls > 0) return { tone: "success", label: "Seen calling", sub: `${seen.calls} call${seen.calls === 1 ? "" : "s"} · last ${timeAgo(seen.last)}` };
+    if (agentById(agent.id)?.connect === "manual") return { tone: "neutral", label: "Manual setup", sub: "Added by hand, not seen calling Nexus yet" };
     return { tone: "neutral", label: "Detected", sub: "Not seen calling Nexus yet" };
   };
   const bypassing = found.filter((a) => directFor(a).length > 0).length;
@@ -141,9 +143,9 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
   }
 
   const commandFor = (agent: DetectedAgent): { text: string; label: string } =>
-    agent.id === "claude" ? { text: claudeHttpCmd, label: "Official command · HTTP transport, bound to this project" }
-    : agent.id === "codex" ? { text: codexHttpCmd, label: "Official command · URL registration, bound to this project" }
-    : { text: boundHttpUrl, label: "Point this agent's MCP config at the endpoint, bound to this project" };
+    agent.id === "claude" ? { text: claudeHttpCmd, label: "Official command · registers Nexus for this project" }
+    : agent.id === "codex" ? { text: codexHttpCmd, label: "Official command · registers Nexus for this project" }
+    : { text: boundHttpUrl, label: "Point this agent's MCP config at Nexus for this project" };
 
   const loading = desktop && agents === null;
   const empty = desktop && agents !== null && agents.length === 0;
@@ -153,7 +155,7 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
       <div className="flex shrink-0 flex-wrap items-center gap-3">
         <p className="min-w-0 flex-1 text-[12.5px] text-(--muted)">
           {desktop && agents !== null
-            ? <><strong className="font-medium text-(--text)">{found.length}</strong> detected · <strong className="font-medium text-(--text)">{calling}</strong> seen calling · <strong className="font-medium text-(--text)">{bypassing}</strong> bypassing Nexus</>
+            ? <><strong className="font-medium text-(--text)">{found.length}</strong> detected · <strong className="font-medium text-(--text)">{calling}</strong> seen calling · <strong className="font-medium text-(--text)">{bypassing}</strong> set up without Nexus</>
             : "Coding agents detected on this machine. Detection is not registration."}
         </p>
         {projects.length > 0 ? (
@@ -176,7 +178,7 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
           </div>
         </Card>
       )}
-      {empty && <Card><Empty title="No agents detected">None of the known agent commands or configs were found. An agent appearing later bypasses Nexus until its config points at it.</Empty></Card>}
+      {empty && <Card><Empty title="No agents detected">None of the known agent commands or configs were found. An agent appearing later is set up without Nexus until its config points at it.</Empty></Card>}
 
       {desktop && agents !== null && agents.length > 0 && current && (
         <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,4fr)_minmax(0,7fr)]" style={{ minHeight: 320 }}>
@@ -220,7 +222,7 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
                     <Empty title="Not detected">Install {current.name} and it will appear here, ready to connect.</Empty>
                   ) : (
                     <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-4">
-                      <CardHeading eyebrow={`Connect to Nexus · ${cliProject?.name ?? "no project"}`} title="Point it at Nexus, not the provider" action={<Badge tone={current.http_reachable ? "success" : "warning"} dot>{current.http_reachable ? "Nexus reachable" : "Nexus not running"}</Badge>} />
+                      <CardHeading eyebrow={`Connect to Nexus · ${cliProject?.name ?? "no project"}`} title="Connect your agent to Nexus, not straight to a service" action={<span className="flex flex-col items-end gap-1"><Badge tone={current.http_reachable ? "success" : "warning"} dot>{current.http_reachable ? "Nexus is running" : "Nexus not running"}</Badge>{!current.http_reachable && <span className="text-[11.5px] text-(--muted)">Nexus only runs while this app is open.</span>}</span>} />
                       <div className="rounded-[12px] border border-(--line) px-3 py-2.5">
                         <div className="flex items-center gap-3">
                           <span className="nx-mono min-w-0 flex-1 break-all text-(--text)" style={{ whiteSpace: "normal" }}>{cliProject ? command.text : "Register a project to get a command."}</span>
@@ -234,7 +236,7 @@ export function AgentsView({ projects, onConnect }: { projects: Project[]; onCon
                       </div>
 
                       <div className="mt-5">
-                        <CardHeading eyebrow="Direct entries" title={direct.length === 0 ? "None. Nothing bypasses Nexus here." : `${direct.length} ${direct.length === 1 ? "entry bypasses" : "entries bypass"} Nexus`} />
+                        <CardHeading eyebrow="Agents set up without Nexus" title={direct.length === 0 ? "None. Every agent here goes through Nexus." : `${direct.length} ${direct.length === 1 ? "entry" : "entries"} set up without Nexus`} />
                         {direct.length > 0 && <ul className="-mx-4 -mt-1">{direct.map(({ entry, where }) => entryRow(entry, current.id, where))}</ul>}
                       </div>
                     </div>

@@ -142,7 +142,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
   const steps = [
     { done: true, label: "Folder registered", detail: project.path },
     { done: agentsSeen.length > 0, label: agentsSeen.length > 0 ? `${agentsSeen.map((a) => agentDisplayName(a.name)).join(", ")} reached Nexus` : "Connect an agent", detail: agentsSeen.length > 0 ? "Its calls show up under Activity" : "One click writes the config. Then restart the agent and ask it which Nexus project it is in." },
-    { done: connected.length > 0, label: connected.length > 0 ? `${connected.length} service${connected.length === 1 ? "" : "s"} bound` : "Bind a service (optional)", detail: connected.length > 0 ? connected.map((c) => `${c.provider} → ${c.resource ?? c.target}`).join(" · ") : "Tell Nexus which exact resource this project uses. Browser approval, nothing to type." },
+    { done: connected.length > 0, label: connected.length > 0 ? `${connected.length} service${connected.length === 1 ? "" : "s"} connected` : "Add a service (optional)", detail: connected.length > 0 ? connected.map((c) => `${c.provider} → ${c.resource ?? c.target}`).join(" · ") : "Tell Nexus which exact resource this project uses. Browser approval, nothing to type." },
   ];
 
   const sharedKeys = new Set(blastWarnings.map((w) => w.accountKey));
@@ -150,7 +150,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
   const stepsDone = steps.filter((s) => s.done).length;
   const statusTone: Tone = protectedNow ? "success" : pending.length > 0 ? "info" : "warning";
   const statusLabel = protectedNow ? "Protected" : pending.length > 0 ? "Approval in browser" : setupDone ? "Agent connected" : "Almost set up";
-  const headline = protectedNow ? `Every call resolves to ${connected[0].resource ?? connected[0].target}` : pending.length > 0 ? "Finish the approval waiting in your browser" : setupDone ? "Bind a service so calls resolve to the right resource" : "Connect an agent to see Nexus working";
+  const headline = protectedNow ? `Every call resolves to ${connected[0].resource ?? connected[0].target}` : pending.length > 0 ? "Finish the approval waiting in your browser" : setupDone ? "Add a service so calls reach the right resource" : "Connect an agent to see Nexus working";
   const tierTone = (tier: string): Tone => (tier === "native" ? "success" : tier === "curated" ? "info" : "warning");
 
   return (
@@ -172,7 +172,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
           </dl>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" isDisabled={verifying || !desktopAvailable()} onPress={() => void verifyOnDisk()}>{verifying ? "Checking…" : "Check project file"}</Button>
-            <Button size="sm" onPress={setupDone && !protectedNow ? onAddConnection : onConnectAgent}>{setupDone && !protectedNow ? "Bind a service" : "Connect agent"}</Button>
+            <Button size="sm" onPress={setupDone && !protectedNow ? onAddConnection : onConnectAgent}>{setupDone && !protectedNow ? "Add a service" : "Connect agent"}</Button>
           </div>
         </div>
       </Card>
@@ -180,7 +180,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
       {(blastWarnings.length > 0 || (diskCheck && !diskDiffers)) && (
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {blastWarnings.length > 0 && (
-            <button type="button" className="nx-badge cursor-pointer !px-3 !py-1.5 text-[12px]" data-tone="warning" onClick={() => onView("services")} title={blastWarnings.map((w) => `${w.provider} · ${w.accountLabel} is also bound by ${w.projectIds.filter((id) => id !== project.id).map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") || "another project"}`).join("\n")}>
+            <button type="button" className="nx-badge cursor-pointer !px-3 !py-1.5 text-[12px]" data-tone="warning" onClick={() => onView("services")} title={blastWarnings.map((w) => `${w.provider} · ${w.accountLabel} is also used by ${w.projectIds.filter((id) => id !== project.id).map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") || "another project"}`).join("\n")}>
               {blastWarnings.length} account{blastWarnings.length === 1 ? " is" : "s are"} shared with other projects · Review
             </button>
           )}
@@ -239,7 +239,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
                   <span className="nx-row-sub" title={step.detail}>{step.detail}</span>
                 </span>
                 {i === 1 && !step.done && <Button size="sm" onPress={onConnectAgent}>Connect agent</Button>}
-                {i === 2 && !step.done && <Button size="sm" variant="outline" onPress={onAddConnection}>Bind</Button>}
+                {i === 2 && !step.done && <Button size="sm" variant="outline" onPress={onAddConnection}>Add</Button>}
               </div>
             )) : agentsSeen.map((agent) => (
               <div key={agent.name} className="nx-row" style={{ borderTop: "1px solid var(--line-soft)" }}>
@@ -254,7 +254,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
         <Card flush className="flex min-h-0 flex-col">
           <div className="shrink-0 px-5 pt-4">
             <CardHeading
-              eyebrow="Bindings"
+              eyebrow="Services"
               title={project.connections.length === 0 ? "None yet" : `${connected.length}/${project.connections.length} connected`}
               action={<span className="flex gap-1.5">{live && <Button size="sm" variant="ghost" isDisabled={liveChecking} onPress={() => void runGuardedRead()}>{liveChecking ? "Testing…" : "Test connection"}</Button>}<Button size="sm" variant="outline" onPress={() => onView("bindings")}>Manage</Button></span>}
             />
@@ -262,7 +262,7 @@ export function Overview({ project, projects, accounts, onView, onAddConnection,
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {project.connections.length === 0 ? (
-              <Empty title="Nothing bound yet" action={<Button size="sm" onPress={onAddConnection}>Add a binding</Button>}>Approve in your browser, pick the account and resource, and the rest fills in.</Empty>
+              <Empty title="No services yet" action={<Button size="sm" onPress={onAddConnection}>Add a service</Button>}>Approve in your browser, pick the account and resource, and the rest fills in.</Empty>
             ) : project.connections.map((connection) => {
               const tier = tierForProvider(connection.provider);
               const ok = connection.authState === "connected";

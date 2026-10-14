@@ -9,6 +9,7 @@ import { type PendingLinkRequest } from "./topology";
 import { ThemeButton, initTheme } from "./onboarding";
 import { useAuditLog } from "./app/audit";
 import { FirstRun } from "./views/FirstRun";
+import { useNexusStatus } from "./useNexusStatus";
 import { ProjectPage } from "./views/ProjectPage";
 import { ConnectionsPage } from "./views/ConnectionsPage";
 import { Button } from "@heroui/react";
@@ -32,6 +33,7 @@ import { ConnectAgentModal } from "./modals/ConnectAgentModal";
 import "./App.css";
 
 function App() {
+  const nexusServer = useNexusStatus();
   const [view, setView] = useState<View>("home");
   const [projectTab, setProjectTab] = useState<ProjectTab>("status");
   const [connectionsTab, setConnectionsTab] = useState<ConnectionsTab>("accounts");
@@ -966,6 +968,12 @@ function App() {
             {!desktopAvailable() && (
               <Notice tone="warning">Browser preview shows saved project details only. Connecting services, saved approvals, activity logs, and agent detection need the desktop app.</Notice>
             )}
+            {nexusServer.running === false && (
+              <Notice tone="warning">
+                Nexus is not running, so your agents cannot reach it. It only runs while this app is open.{" "}
+                <Button variant="ghost" size="sm" isDisabled={nexusServer.starting} onPress={() => void nexusServer.restart()}>{nexusServer.starting ? "Starting…" : "Restart Nexus"}</Button>
+              </Notice>
+            )}
             {notice && <Notice tone={notice.includes("connected") ? "success" : "warning"} onDismiss={() => setNotice("")}>{notice}</Notice>}
             <UpdateNotice />
           </>
@@ -1007,6 +1015,7 @@ function App() {
 
       {onboardingOpen && (
         <FirstRun
+          server={nexusServer}
           resumeProject={resumeProject}
           projects={projects}
           onRegister={(input) => addProject(input, { stay: true })}

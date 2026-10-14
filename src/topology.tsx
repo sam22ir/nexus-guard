@@ -113,6 +113,7 @@ const KNOWN_AGENTS: Record<string, string> = {
   "codex-cli": "Codex",
   opencode: "OpenCode",
   pi: "Pi",
+  gemini: "Gemini CLI",
   cursor: "Cursor",
   windsurf: "Windsurf",
 };

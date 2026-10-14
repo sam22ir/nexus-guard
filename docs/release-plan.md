@@ -6,7 +6,7 @@ Written 2026-10-08 from research on the current code and official docs. Each ite
 
 ### 1. Block DNS rebinding (security)
 
-A web page can use DNS rebinding to make the browser call the local server on 127.0.0.1:3939. The MCP spec says local servers "MUST validate the Origin header". Today `mcp/nexus-http-server.mjs` checks neither Host nor Origin.
+A web page can use DNS rebinding to make the browser call the local server on 127.0.0.1:3939. The MCP spec says local servers "MUST validate the Origin header". Status: shipped. `mcp/nexus-http-server.mjs` now calls `checkLocalRequest` from `mcp/local-origin.mjs` before any route. It checks Host (only `127.0.0.1`, `localhost` or `[::1]`, with or without a port) and refuses any request carrying an Origin header. Refusals are `403`. `mcp/local-origin.test.mjs` covers the Host and Origin rules and the HTTP `403` on each route.
 
 - One check at the top of the request handler, before any route, so `/healthz`, `/session`, `/context` and `/mcp` are all covered. The SDK's own option only covers `/mcp`.
 - Host: allow only the hostnames `127.0.0.1`, `localhost` and `[::1]`, with or without a port. The app's own probes send `Host: 127.0.0.1` without a port; agents send `127.0.0.1:3939`.
