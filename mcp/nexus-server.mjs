@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { execFile } from "node:child_process";
@@ -685,8 +687,63 @@ export function pickWorkspaceFromRoots(roots) {
   return { ok: true, workspace: [...dirs][0] };
 }
 
+const MAX_PROJECT_WALK = 24;
+
+/** Global mode: an agent started in `project/src` still belongs to `project`.
+ *  Walks from a roots-derived directory up to the nearest ancestor (itself
+ *  included) holding a real `.nexus/project.json`. Never reads outside that
+ *  chain, never ascends to or above the home directory, never follows a
+ *  `.nexus` symlink, fails closed on any non-directory `.nexus` in the chain,
+ *  never crosses a `.git` boundary, and returns the original directory when nothing is found
+ *  so the "unresolved" path is unchanged. Explicit workspaces are never walked. */
+export async function resolveProjectRoot(dir, { homeDir = os.homedir() } = {}) {
+  let start;
+  try {
+    start = await fs.realpath(dir);
+  } catch {
+    return dir;
+  }
+  const home = await fs.realpath(homeDir).catch(() => path.resolve(homeDir));
+  // "project": honour it; "stop": a .nexus entry that is not a real directory (fail closed); "none": keep looking.
+  const inspect = async (candidate) => {
+    const nexusDir = path.join(candidate, ".nexus");
+    let stat;
+    try {
+      stat = await fs.lstat(nexusDir);
+    } catch (error) {
+      return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? "none" : "stop";
+    }
+    if (!stat.isDirectory()) return "stop"; // symlink, file, anything else: never skipped past
+    try {
+      const file = path.join(nexusDir, "project.json");
+      if (!(await fs.lstat(file)).isFile()) return "none";
+      await fs.access(file, fsConstants.R_OK);
+      return "project";
+    } catch {
+      return "none";
+    }
+  };
+  const hasGit = (candidate) => fs.lstat(path.join(candidate, ".git")).then(() => true, () => false);
+  let current = start;
+  for (let level = 0; level < MAX_PROJECT_WALK; level += 1) {
+    if (level > 0 && current === home) break;
+    if (level > 0) {
+      const rel = path.relative(current, home);
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) break; // ancestor of home
+    }
+    const found = await inspect(current);
+    if (found === "project") return current;
+    if (found === "stop") break;
+    if (await hasGit(current)) break; // a repository boundary is never crossed
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return dir;
+}
+
 /** Directly relays upstream tool definitions and calls, rather than reimplementing provider tools. */
-export function makeNexusServer({ workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, getWriteGrant, getBindingScope, getServiceScopeSpec, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
+export function makeNexusServer({ homeDir, workspace = process.cwd(), getToken = readSupabaseToken, connectProvider = connectSupabase, refreshToken, onAudit, getGithubToken, connectGithubProvider, getRemoteToken, connectRemoteProvider, getWriteGrant, getBindingScope, getServiceScopeSpec, knownCurated = [], sessionStore = null, requireSession = false } = {}) {
   const server = new Server({ name: "nexus-guard", version: "0.3.0" }, { capabilities: { tools: { listChanged: false } } });
   const dependencies = { getToken, connectProvider, refreshToken };
   const githubDeps = {
@@ -980,7 +1037,9 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
     if (!server.getClientCapabilities()?.roots) return { ok: false, reason: "The agent does not share its workspace folder, so Nexus cannot tell which project this is. Register Nexus in the project with its workspace, then try again." };
     try {
       const result = await extra.sendRequest({ method: "roots/list" }, ListRootsResultSchema);
-      return pickWorkspaceFromRoots(result.roots);
+      const picked = pickWorkspaceFromRoots(result.roots);
+      if (!picked.ok) return picked;
+      return { ok: true, workspace: await resolveProjectRoot(picked.workspace, { homeDir }) };
     } catch {
       return { ok: false, reason: "Nexus could not read the agent's workspace folder. Register Nexus in the project with its workspace, then try again." };
     }
@@ -1022,7 +1081,7 @@ export function makeNexusServer({ workspace = process.cwd(), getToken = readSupa
       await audit({ ...auditRecord({ sessionId: `anon:${instanceId}`, context: ctxForAudit, connection: null, operation: name ?? null, decision: "block", reason: "Missing Nexus session." }), __context: ctxForAudit });
       return decisionResult("block", { reason: "Missing Nexus session. Mint one via POST /session, then retry with session.", operation: name ?? null }, true);
     }
-    if (boundFromRoots && validatedToken?.workspace && path.resolve(validatedToken.workspace) !== pinnedWorkspace) {
+    if (boundFromRoots && validatedToken?.workspace && (await fs.realpath(validatedToken.workspace).catch(() => path.resolve(validatedToken.workspace))) !== pinnedWorkspace) {
       return blocked("That Nexus session does not belong to the project this agent is in.");
     }
     const tokenKey = validatedToken?.token ?? null;

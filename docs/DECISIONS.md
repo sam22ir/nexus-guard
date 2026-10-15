@@ -10,6 +10,7 @@
 | 2026-09-27 | Navigation: Home, project sidebar with Bindings, global Services / Agents / Settings | Locked | §12 |
 | 2026-09-28 | MVP simplified: agents connect to Nexus, Nexus connects to services registered once. Guard out of MVP, possible paid feature | Locked | §4, §14 |
 | 2026-09-28 | No whole-page scrolling in any tab | Locked | §8 |
+| 2026-10-14 | "Connect once": Claude Code and OpenCode get one user-level Nexus entry (bare URL, project bound from MCP roots, walking up to the nearest `.nexus/project.json`). Codex, Pi, Cursor and Gemini stay per project. Per-project entries remain the fallback because roots are deprecated in MCP 2026-07-28 | Proposed | §7, §10 |
 | 2026-09-29 | Execution model: agents call through Nexus, Nexus forwards with the bound account's credentials, agents never hold keys | Locked | §3, §8 |
 | 2026-09-29 | MVP catalog: about 50 services by category (final list pending) | Superseded 2026-10-08 | §13 |
 | 2026-09-29 | Topology view is MVP: drag-to-link with explicit confirm, fixed columns, canvas never writes directly | Locked | §12 |

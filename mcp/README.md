@@ -86,8 +86,14 @@ claude mcp add --scope project --transport http nexus http://localhost:3939/mcp 
 codex mcp add nexus --url "http://localhost:3939/mcp?workspace=$PWD"
 ```
 
-Register per project, not once globally: the workspace is what tells Nexus which
-project the agent is in, so each project needs its own entry. `--scope project`
+Register per project by default: the workspace is what tells Nexus which
+project the agent is in, so each project needs its own entry. The exception is an
+agent that declares MCP roots (Claude Code and OpenCode, verified; Codex does not):
+the desktop app's "Connect once" writes one user-level entry with the bare URL
+(`http://localhost:3939/mcp`, no workspace), and Nexus binds each session from the
+agent's single root, walking up from a subfolder to the nearest `.nexus/project.json`.
+Roots are deprecated in the MCP 2026-07-28 spec (removal no earlier than 2027-07-28),
+so per-project entries stay supported as the fallback. `--scope project`
 writes the entry to the project's `.mcp.json`; Claude Code's default scope is
 `local`, which stores it in `~/.claude.json` where the desktop app's check cannot see it.
 Verify each CLI's own flag for custom headers before relying on it — where an agent has no header
