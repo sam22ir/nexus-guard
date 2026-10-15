@@ -65,7 +65,7 @@ Agents reach one persistent local Nexus over HTTP:
   Nexus never falls back to the directory it was started in — otherwise a single
   global registration would hand every agent whatever project the server happens
   to be running from. Register Nexus per project so each agent sends its own
-  workspace; the desktop app (Accounts → Agents) writes that project's path into the agent's
+  workspace; the desktop app (Agents) writes that project's path into the agent's
   own config. An established MCP session stays pinned to the workspace it was
   created with and does not have to resend the header.
 - The local server runs only while the desktop app is open; the desktop app starts
@@ -81,21 +81,23 @@ Register the endpoint with the agent CLI — this is the preferred path
 ```bash
 # Run inside the project folder. The registration must carry that project's
 # path as X-Nexus-Workspace, or requests are refused at call time.
-claude mcp add --transport http nexus http://localhost:3939/mcp \
+claude mcp add --scope project --transport http nexus http://localhost:3939/mcp \
   --header "X-Nexus-Workspace: $PWD"
 codex mcp add nexus --url "http://localhost:3939/mcp?workspace=$PWD"
 ```
 
 Register per project, not once globally: the workspace is what tells Nexus which
-project the agent is in, so each project needs its own entry. Verify each CLI's
-own flag for custom headers before relying on it — where an agent has no header
+project the agent is in, so each project needs its own entry. `--scope project`
+writes the entry to the project's `.mcp.json`; Claude Code's default scope is
+`local`, which stores it in `~/.claude.json` where the desktop app's check cannot see it.
+Verify each CLI's own flag for custom headers before relying on it — where an agent has no header
 support, the `?workspace=` query form above carries the same value, and the
-desktop app (Accounts → Agents) writes the config entry directly. A registration with neither
+desktop app (Agents) writes the config entry directly. A registration with neither
 is refused rather than silently defaulted.
 
 Live test before use: `GET http://localhost:3939/healthz` should return
 `{"ok":true,…}`, and `GET http://localhost:3939/context?workspace=<path>`
-returns the safe connection identity (no secrets). The desktop app (Accounts → Agents)
+returns the safe connection identity (no secrets). The desktop app (Agents)
 probes the same `/healthz` and reports `httpReachable` per agent, and lists
 existing direct MCP entries that do not match the Nexus HTTP URL as
 `found,unmanaged`.

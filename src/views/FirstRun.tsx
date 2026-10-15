@@ -1,23 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "../keychain";
 import { starterProjects, type Project } from "../store";
 import { ThemeButton, nexusHttpUrlFor } from "../onboarding";
+import { AGENTS, agentById, manualSnippet, type AgentInfo } from "../agents";
 import { agentDisplayName } from "../topology";
 import { type AgentConfigEdit, type AgentTestStep, type AuditEntry, type DetectedAgent, type FolderInspection } from "../app/types";
 import { Button } from "@heroui/react";
 import { Icon as NxIcon } from "../ui";
 import { inputClass } from "../app/styles";
+import type { NexusStatus } from "../useNexusStatus";
 
-const STEPS = ["Project", "Agent", "See it work"] as const;
+const STEPS = ["Project", "Agent", "Connection"] as const;
 const ALL_SERVICES = ["Supabase", "GitHub"] as const;
-const FALLBACK_AGENTS = [
-  { id: "claude", name: "Claude Code" },
-  { id: "codex", name: "Codex" },
-  { id: "opencode", name: "OpenCode" },
-];
-const AGENT_FILES: Record<string, string> = { claude: ".mcp.json", codex: ".codex/config.toml", opencode: "opencode.json", pi: ".mcp.json" };
 const FIRST_PROMPT = "Which Nexus project am I in?";
+/** How long to wait on the checklist before saying what usually goes wrong. */
+const STUCK_MS = 60_000;
+
+type RowState = "pending" | "ok" | "failed";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 
@@ -25,7 +25,9 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?
  *  one click, then watch the agent's first real call arrive. Linking a service
  *  is optional and comes after the proof, so the first value needs no accounts.
  *  The graph on the right gains a node per step. */
-export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding, onOpenConnectAgent, onSkip, onFinish }: {
+export function FirstRun({ server, projects, resumeProject, onRegister, onOpenAddBinding, onOpenConnectAgent, onSkip, onFinish }: {
+  /** The one shared check of Nexus's local server (see useNexusStatus). */
+  server: NexusStatus;
   projects: Project[];
   /** A project registered earlier whose setup was skipped: the wizard reopens at the agent step. */
   resumeProject?: Project | null;
@@ -46,36 +48,36 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
   // GitHub only connects when this build has the Nexus GitHub App set up; otherwise hide it so nobody hits a dead end.
   const [githubReady, setGithubReady] = useState(false);
   const SERVICES = githubReady ? ALL_SERVICES : ALL_SERVICES.filter((s) => s !== "GitHub");
-  const [agents, setAgents] = useState<{ id: string; name: string }[]>(FALLBACK_AGENTS);
+  const [agents, setAgents] = useState<readonly AgentInfo[]>(AGENTS);
   const [agentsFound, setAgentsFound] = useState(false);
-  const [agentId, setAgentId] = useState<string | null>(FALLBACK_AGENTS[0].id);
+  const [agentId, setAgentId] = useState<string | null>(AGENTS[0].id);
   const [written, setWritten] = useState<AgentConfigEdit | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState("");
-  // Setup checks run when the agent is connected. These are not proof that the agent works.
-  const [connectChecks, setConnectChecks] = useState<AgentTestStep[]>([]);
-  // Only the optional "simulated check" in the last step counts as a stand-in for the agent's first call.
+  // Results of test_agent_setup. These describe Nexus's side only, never the agent's first call.
   const [checks, setChecks] = useState<AgentTestStep[]>([]);
   const [testing, setTesting] = useState(false);
-  // Offered after a wait, or on request, so it is not a shortcut around trying the agent.
-  const [trouble, setTrouble] = useState(false);
   const [testError, setTestError] = useState("");
-  const [baseline, setBaseline] = useState<string | null>(null);
+  // Items the user ticks off on the checklist. Only the agent's own steps are ticked by hand.
+  const [ticks, setTicks] = useState<Record<string, boolean>>({});
+  const [stuck, setStuck] = useState(false);
   const [liveCall, setLiveCall] = useState<AuditEntry | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [server, setServer] = useState<{ running: boolean; needs_node?: boolean; detail: string } | null>(null);
-  const [starting, setStarting] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const { running, detail, restart, needsNode, starting } = server;
   const desktop = desktopAvailable();
 
   const project = projects.find((p) => p.id === registeredId) ?? null;
   const nameUsed = !registeredId && projects.some((p) => p.name.toLowerCase() === name.trim().toLowerCase());
   const canRegister = name.trim().length > 0 && path.trim().length > 0 && !nameUsed;
-  const simulated = checks.length > 0 && ["Project file", "HTTP reachable", "Session"].every((s) => checks.find((c) => c.step === s)?.ok);
   // Only the agent's real first call proves it works. The setup check only shows Nexus's own side is fine.
   const proven = !!liveCall;
   const agent = agents.find((a) => a.id === agentId) ?? null;
-  const agentFile = agentId ? AGENT_FILES[agentId] ?? "its MCP config" : "its MCP config";
+  const agentFile = agent?.file ?? "its MCP config";
+  const agentLabel = agent?.name ?? "your agent";
+  const callerName = liveCall ? agentDisplayName(liveCall.agent ?? agentLabel) : agentLabel;
   const connected = !!written;
+  const manual = agent?.connect === "manual";
+  const snippet = project && agent && manual ? manualSnippet(agent.id, project.path) : "";
 
   // Spot an existing Nexus project in the chosen folder and offer to reuse its name.
   useEffect(() => {
@@ -88,38 +90,20 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
     return () => window.clearTimeout(timer);
   }, [path, desktop, registeredId]);
 
-  async function openNodeDownload() {
-    try {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl("https://nodejs.org/en/download");
-    } catch { /* the message already names nodejs.org */ }
-  }
-
-  async function ensureServer() {
-    if (!desktop) return true;
-    setStarting(true);
-    try {
-      const status = await invoke<{ running: boolean; needs_node?: boolean; detail: string }>("ensure_nexus_server");
-      setServer(status);
-      return status.running;
-    } catch {
-      setServer({ running: false, detail: "Nexus could not start its local server. Restart the app." });
-      return false;
-    } finally {
-      setStarting(false);
-    }
-  }
-  useEffect(() => { void ensureServer(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!desktop) return;
     invoke<{ configured: boolean }>("github_status").then((status) => setGithubReady(status.configured)).catch(() => undefined);
   }, [desktop]);
 
   // Preselect the first agent found on this machine so the common case is one click.
+  // Ids the shared list does not know are ignored; with nothing found, the full list is offered.
   useEffect(() => {
     if (!desktop) return;
     invoke<DetectedAgent[]>("detect_agents").then((found) => {
-      const list = found.filter((a) => a.found).map((a) => ({ id: a.id, name: a.name }));
+      const list = found
+        .filter((a) => a.found)
+        .map((a) => agentById(a.id))
+        .filter((a): a is AgentInfo => a !== null);
       if (list.length > 0) { setAgents(list); setAgentsFound(true); setAgentId(list[0].id); }
     }).catch(() => undefined);
   }, [desktop]);
@@ -133,7 +117,6 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
     void read().then((entries) => {
       if (cancelled) return;
       base = entries.reduce<string>((latest, e) => (String(e.ts ?? "") > latest ? String(e.ts) : latest), "");
-      setBaseline(base);
     });
     const timer = window.setInterval(() => {
       if (base === null) return;
@@ -146,9 +129,16 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [step, project, desktop]);
 
+  // Run the Nexus-side checks whenever step 3 opens.
   useEffect(() => {
+    if (step === 2 && desktop) void runSetupChecks();
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After 60 seconds on step 3 with no call, say what usually causes it.
+  useEffect(() => {
+    setStuck(false);
     if (step !== 2 || liveCall) return;
-    const timer = window.setTimeout(() => setTrouble(true), 45_000);
+    const timer = window.setTimeout(() => setStuck(true), STUCK_MS);
     return () => window.clearTimeout(timer);
   }, [step, liveCall]);
 
@@ -163,6 +153,13 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
       const selected = await open({ directory: true, multiple: false, title: "Choose the project folder" });
       if (typeof selected === "string" && selected) changePath(selected);
     } catch { /* keep the typed path */ }
+  }
+
+  async function openNodeDownload() {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl("https://nodejs.org/en/download");
+    } catch { /* the message already names nodejs.org */ }
   }
 
   async function register() {
@@ -187,27 +184,26 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
   }
 
   async function connectAgent() {
-    if (!project || !agentId) return;
+    if (!project || !agent) return;
     if (!desktop) { setConnectError("Open the desktop app to connect an agent."); return; }
-    setConnecting(true); setConnectError(""); setConnectChecks([]);
-    await ensureServer();
+    setConnecting(true); setConnectError("");
+    await restart();
     const httpUrl = nexusHttpUrlFor(project.path);
     try {
-      const result = await invoke<string | AgentConfigEdit>("connect_agent_to_project", { workspacePath: project.path, agentId, httpUrl });
+      const result = await invoke<string | AgentConfigEdit>("connect_agent_to_project", { workspacePath: project.path, agentId: agent.id, httpUrl });
       setWritten(typeof result === "string" ? { path: result, backup: "", diff: "" } : result);
-      setConnectChecks(await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId, httpUrl }));
+      await runSetupChecks();
     } catch {
-      setConnectError(`Could not write ${agentFile}. Check the folder still exists and the file is valid, or use the manual steps.`);
+      setConnectError(`Could not write ${agentFile}. Check the folder still exists and the file is valid, or use “Prefer to run the command yourself?” below.`);
     } finally {
       setConnecting(false);
     }
   }
 
-  async function runTest() {
+  async function runSetupChecks() {
     if (!project) return;
     if (!desktop) { setTestError("Open the desktop app to run the check."); return; }
-    setTesting(true); setTestError(""); setChecks([]);
-    await ensureServer();
+    setTesting(true); setTestError("");
     try {
       setChecks(await invoke<AgentTestStep[]>("test_agent_setup", { workspacePath: project.path, agentId: agentId ?? "claude", httpUrl: nexusHttpUrlFor(project.path) }));
     } catch {
@@ -217,12 +213,19 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
     }
   }
 
-  function copyPrompt() {
+  function copyText(key: string, text: string) {
     if (!navigator.clipboard?.writeText) return;
-    navigator.clipboard.writeText(FIRST_PROMPT).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }).catch(() => undefined);
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key);
+      window.setTimeout(() => setCopied((current) => (current === key ? null : current)), 1500);
+    }).catch(() => undefined);
   }
 
-  function bindService() {
+  function toggleTick(key: string) {
+    setTicks((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  function addService() {
     if (project) onOpenAddBinding(project.id);
   }
 
@@ -231,22 +234,12 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
   const summaries = [
     project ? project.path : null,
     connected && agent ? agent.name : null,
-    proven ? "Routed" : null,
+    proven ? "Connected" : null,
   ];
-  // "Saved approval" is about a Supabase binding, which a new user does not have yet; a red mark there reads as a failure.
-  const checkList = (all: AgentTestStep[]) => {
-    const list = all.filter((c) => c.step !== "Saved approval");
-    return (
-    <ul className="rounded-[12px] border border-(--line)">
-      {list.map((c, i) => (
-        <li key={c.step} className="flex items-start gap-2.5 px-3 py-2" style={i > 0 ? { borderTop: "1px solid var(--line-soft)" } : undefined}>
-          <span className="nx-check mt-0.5" data-state={c.ok ? "done" : "failed"} style={{ width: 18, height: 18 }}><NxIcon name={c.ok ? "check" : "x"} size={11} /></span>
-          <span className="flex min-w-0 flex-1 flex-col"><span className="text-[12.5px] font-medium text-(--text)">{c.step}</span><span className="text-[11.5px] text-(--muted)">{c.detail}</span></span>
-        </li>
-      ))}
-    </ul>
-    );
-  };
+
+  const nexusState: RowState = running === null ? "pending" : running ? "ok" : "failed";
+  const configCheck = checks.find((c) => c.step === "Agent config");
+  const configState: RowState = configCheck ? (configCheck.ok ? "ok" : "failed") : checks.length > 0 || testError ? "failed" : "pending";
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-(--canvas)">
@@ -254,20 +247,24 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
         <img src="/nexus-symbol.png" alt="" width={26} height={26} className="rounded-[8px] bg-[#1a1a1a] p-1" />
         <span className="text-[14px] font-semibold text-(--text)">Set up Nexus</span>
         <span className="text-[12px] text-(--muted)">Step {step + 1} of {STEPS.length} · about two minutes</span>
-        <span className="ml-auto flex items-center gap-1">
-          {desktop && server && (
-            <span className="nx-badge mr-1 !px-2.5 !py-1 text-[11.5px]" data-tone={server.running ? "success" : "warning"} title={server.detail}>
-              {server.running ? "Nexus running" : "Nexus not running"}
-              {!server.running && <button type="button" className="ml-1.5 underline underline-offset-2" disabled={starting} onClick={() => void ensureServer()}>{starting ? "Starting…" : "Start"}</button>}
+        <span className="ml-auto flex min-w-0 items-center gap-2">
+          {desktop && running !== null && (
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="nx-badge mr-1 shrink-0 !px-2.5 !py-1 text-[11.5px]" data-tone={running ? "success" : "warning"} title={detail}>
+                {running ? "Nexus running" : "Nexus not running"}
+                {!running && <button type="button" className="ml-1.5 underline underline-offset-2" disabled={starting} onClick={() => void restart()}>{starting ? "Starting…" : "Start"}</button>}
+              </span>
+              {!running && detail && <span className="max-w-[320px] truncate text-[11.5px] text-(--muted)">{detail}</span>}
             </span>
           )}
-          <ThemeButton /><Button size="sm" variant="ghost" onPress={onSkip}>Skip for now</Button></span>
+          <ThemeButton /><Button size="sm" variant="ghost" onPress={onSkip}>Skip for now</Button>
+        </span>
       </header>
 
-      {desktop && server && !server.running && (
+      {desktop && running === false && (
         <p className="flex shrink-0 flex-wrap items-center gap-3 bg-(--orange-bg) px-6 py-2 text-[12px] text-(--orange)" role="alert">
-          <span className="min-w-0 flex-1">{server.detail}</span>
-          {server.needs_node && <Button size="sm" variant="outline" onPress={() => void openNodeDownload()}>Get Node.js</Button>}
+          <span className="min-w-0 flex-1">{detail}</span>
+          {needsNode && <Button size="sm" variant="outline" onPress={() => void openNodeDownload()}>Get Node.js</Button>}
         </p>
       )}
       <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
@@ -289,7 +286,7 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-(--line-soft) pt-4">
             {step === 0 && (
               <div className="flex flex-col gap-3">
-                <div><h2 className="text-[16px] font-semibold text-(--text)">Pick the folder your agent works in</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Nexus ties your agent to this project, so it can only reach what belongs to it. Nothing secret is stored.</p></div>
+                <div><h2 className="text-[16px] font-semibold text-(--text)">Add your project</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Pick the folder your agent works in.</p></div>
                 <label className="nx-field">
                   Project folder
                   <span className="flex gap-2">
@@ -318,77 +315,127 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
                 <div><h2 className="text-[16px] font-semibold text-(--text)">Connect your agent</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">{agentsFound ? "Found on this machine. Pick the one you use." : desktop ? "No agent was detected, so these are the common ones." : "The desktop app lists the agents it finds."}</p></div>
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Agent">
                   {agents.map((a) => (
-                    <button key={a.id} type="button" role="radio" aria-checked={agentId === a.id} onClick={() => { setAgentId(a.id); setWritten(null); setConnectChecks([]); setConnectError(""); }} className="nx-badge cursor-pointer !px-3.5 !py-2 text-[12.5px]" style={agentId === a.id ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{a.name}</button>
+                    <button key={a.id} type="button" role="radio" aria-checked={agentId === a.id} onClick={() => { setAgentId(a.id); setWritten(null); setChecks([]); setConnectError(""); setTestError(""); setTicks({}); }} className="nx-badge cursor-pointer !px-3.5 !py-2 text-[12.5px]" style={agentId === a.id ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{a.name}</button>
                   ))}
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button size="sm" isDisabled={!project || !agentId || connecting || !desktop} onPress={() => void connectAgent()}>{connecting ? "Connecting…" : connected ? "Connect again" : agent ? `Connect ${agent.name}` : "Pick an agent"}</Button>
-                  <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">{desktop ? <>Adds one Nexus entry to <span className="nx-mono">{agentFile}</span> in your project. Your other servers are kept and a backup is saved first.</> : "Needs the desktop app."}</span>
-                </div>
-                {connectError && <p className="text-[12px] text-(--red)" role="alert">{connectError}</p>}
-                {written && (
-                  <p className="rounded-[10px] bg-(--green-bg) px-3 py-2 text-[12px] leading-[1.55] text-(--green)">
-                    Wrote <span className="nx-mono">{written.path}</span>{written.diff ? ` · ${written.diff}` : ""}. {written.backup ? <>Backup at <span className="nx-mono">{written.backup}</span>.</> : "New file, so nothing to back up."}
-                  </p>
+                {manual && agent ? (
+                  <div className="flex flex-col gap-2">
+                    <pre className="nx-mono overflow-x-auto rounded-[10px] bg-(--raised) p-3 text-[12px] leading-[1.55] text-(--text)">{snippet}</pre>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button size="sm" variant="outline" onPress={() => copyText("snippet", snippet)}>{copied === "snippet" ? "Copied" : "Copy"}</Button>
+                      <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">Add this to <span className="nx-mono">{agent.file}</span> in your project folder.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button size="sm" isDisabled={!project || !agent || connecting || !desktop} onPress={() => void connectAgent()}>{connecting ? "Connecting…" : connected ? "Connect again" : agent ? `Connect ${agent.name}` : "Pick an agent"}</Button>
+                      <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-(--muted)">{desktop ? <>Adds one Nexus entry to <span className="nx-mono">{agentFile}</span> in your project. Your other servers are kept and a backup is saved first.</> : "Needs the desktop app."}</span>
+                    </div>
+                    {connectError && <p className="text-[12px] text-(--red)" role="alert">{connectError}</p>}
+                    {written && (
+                      <p className="rounded-[10px] bg-(--green-bg) px-3 py-2 text-[12px] leading-[1.55] text-(--green)">
+                        Wrote <span className="nx-mono">{written.path}</span>{written.diff ? ` · ${written.diff}` : ""}. {written.backup ? <>Backup at <span className="nx-mono">{written.backup}</span>.</> : "New file, so nothing to back up."}
+                      </p>
+                    )}
+                    {project && <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, agentId)}>Prefer to run the command yourself?</button>}
+                  </>
                 )}
-                {connectChecks.length > 0 && checkList(connectChecks)}
-                {project && <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => onOpenConnectAgent(project.id, agentId)}>Prefer to run the command yourself?</button>}
               </div>
             )}
 
             {step === 2 && (
               <div className="flex flex-col gap-3">
-                <div><h2 className="text-[16px] font-semibold text-(--text)">See your agent reach Nexus</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Restart {agent?.name ?? "your agent"} in <span className="nx-mono">{project?.path ?? "your project"}</span>, then send it this message.{agentId === "claude" && " Claude Code will ask whether to trust the “nexus” server from .mcp.json. Choose yes, or it will never connect."}{agentId === "codex" && " Codex reads .codex/config.toml in that folder, so start it there."}</p></div>
-                <div className="flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
-                  <span className="min-w-0 flex-1 text-[13px] text-(--text)">{FIRST_PROMPT}</span>
-                  <Button size="sm" variant="outline" onPress={copyPrompt}>{copied ? "Copied" : "Copy"}</Button>
-                </div>
-                {liveCall ? (
-                  <div className="rounded-[12px] bg-(--green-bg) px-3.5 py-2.5 text-[12.5px] leading-[1.55] text-(--green)" role="status">
-                    {agentDisplayName(liveCall.agent ?? agent?.name ?? "Your agent")} called Nexus just now: <span className="nx-mono">{liveCall.operation ?? "a call"}</span> · {liveCall.decision === "allow" ? "allowed" : "refused"}.
+                <div><h2 className="text-[16px] font-semibold text-(--text)">Check the connection</h2><p className="mt-1 text-[12.5px] leading-[1.55] text-(--muted)">Nexus can see some of these steps. The others are on you, so tick them as you go.</p></div>
+                <ul className="flex flex-col rounded-[12px] border border-(--line)" aria-label="Connection checklist">
+                  <LiveRow state={nexusState}>
+                    <span className="text-[13px] text-(--text)">Nexus is running</span>
+                    {running === false && (
+                      <span className="flex flex-wrap items-center gap-3 text-[12px] text-(--red)">
+                        Nexus is not running. Keep Nexus Guard open.
+                        <Button size="sm" variant="outline" isDisabled={starting} onPress={() => void restart()}>{starting ? "Restarting…" : "Restart Nexus"}</Button>
+                      </span>
+                    )}
+                    {running === null && !desktop && <span className="text-[12px] text-(--muted)">Needs the desktop app.</span>}
+                  </LiveRow>
+
+                  {agent && !manual && (
+                    <LiveRow state={configState}>
+                      <span className="text-[13px] text-(--text)"><span className="nx-mono">{agent.file}</span> has the Nexus entry</span>
+                      {configState === "failed" && <span className="text-[12px] text-(--muted)">{configCheck?.detail ?? `Nothing is written yet. Go back and connect ${agent.name}.`}</span>}
+                    </LiveRow>
+                  )}
+
+                  {agent && manual && (
+                    <TickRow ticked={!!ticks.snippet} onToggle={() => toggleTick("snippet")}>
+                      <span className="text-[13px] text-(--text)">Add the snippet to <span className="nx-mono">{agent.file}</span></span>
+                    </TickRow>
+                  )}
+
+                  {agent && (
+                    <TickRow ticked={!!ticks.restart} onToggle={() => toggleTick("restart")}>
+                      <span className="text-[13px] text-(--text)">{agent.restart}</span>
+                      {project && <span className="nx-mono text-[12px] text-(--muted)">{project.path}</span>}
+                    </TickRow>
+                  )}
+
+                  {agent?.trustPrompt && (
+                    <TickRow ticked={!!ticks.trust} onToggle={() => toggleTick("trust")}>
+                      <span className="text-[13px] text-(--text)">{emphasizeChoice(agent.trustPrompt)}</span>
+                      <span className="text-[12px] text-(--muted)">If you skip this, the agent never connects.</span>
+                    </TickRow>
+                  )}
+
+                  <TickRow ticked={!!ticks.prompt} onToggle={() => toggleTick("prompt")}>
+                    <span className="text-[13px] text-(--text)">Send this message to {agentLabel}:</span>
+                    <span className="flex items-center gap-3 rounded-[10px] bg-(--raised) px-3 py-2">
+                      <span className="nx-mono min-w-0 flex-1 text-[13px] text-(--text)">{FIRST_PROMPT}</span>
+                      <Button size="sm" variant="outline" onPress={() => copyText("prompt", FIRST_PROMPT)}>{copied === "prompt" ? "Copied" : "Copy"}</Button>
+                    </span>
+                  </TickRow>
+
+                  <LiveRow state={liveCall ? "ok" : "pending"}>
+                    <span className="text-[13px] text-(--text)">{liveCall ? `${callerName} reached Nexus` : `Waiting for ${agentLabel}'s first call`}</span>
+                  </LiveRow>
+                </ul>
+                {testError && <p className="text-[12px] text-(--red)" role="alert">{testError}</p>}
+
+                {liveCall && (
+                  <div className="flex flex-col gap-1.5 rounded-[12px] bg-(--green-bg) px-3.5 py-2.5" role="status">
+                    <p className="text-[13px] font-semibold text-(--green)">Connected. {callerName} just called Nexus.</p>
+                    <p className="text-[12px] leading-[1.55] text-(--muted)">From now on, every call it makes through Nexus shows up in Home.</p>
                   </div>
-                ) : desktop ? (
-                  <p className="flex items-center gap-2 text-[12.5px] text-(--muted)" role="status"><span className="nx-check" style={{ width: 14, height: 14 }} />{baseline === null ? "Getting ready…" : `Waiting for ${agent?.name ?? "your agent"}'s first call. This updates by itself.`}</p>
-                ) : (
-                  <p className="text-[12px] text-(--muted)">Live detection needs the desktop app.</p>
                 )}
+
+                {!liveCall && stuck && (
+                  <div className="flex flex-col gap-2 rounded-[12px] bg-(--orange-bg) px-3.5 py-2.5 text-[12.5px] leading-[1.55] text-(--orange)" role="status">
+                    <p><strong className="font-semibold">Still waiting. Most likely cause:</strong> {agent?.stuckHint}</p>
+                    <p>Nexus only runs while this app is open.</p>
+                  </div>
+                )}
+                {!liveCall && stuck && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button size="sm" variant="outline" isDisabled={testing || !project || !desktop} onPress={() => void runSetupChecks()}>{testing ? "Checking…" : "Re-check Nexus's side"}</Button>
+                    <span className="min-w-0 flex-1 text-[12px] text-(--muted)">This only checks Nexus. Your agent&apos;s first call is the real test.</span>
+                  </div>
+                )}
+
                 {proven && (
                   <div className="rounded-[12px] bg-(--raised) px-3.5 py-2.5 text-[12.5px] leading-[1.55] text-(--muted)">
                     {otherProject
                       ? <>Without Nexus, an agent in {project?.name} could have reached {otherProject.name}&apos;s resources. Here that call is refused before it leaves your machine.</>
-                      : <>Without Nexus, an agent in {project?.name} could reach any resource your account allows. Here only what you bind to this project is reachable.</>}
-                  </div>
-                )}
-                {!liveCall && !trouble && (
-                  <button type="button" className="self-start text-[12px] text-(--muted) underline underline-offset-2 hover:text-(--text)" onClick={() => setTrouble(true)}>Having trouble?</button>
-                )}
-                {!liveCall && trouble && (
-                  <div className="flex flex-col gap-2 border-t border-(--line-soft) pt-3">
-                    <strong className="text-[13px] font-semibold text-(--text)">Not seeing the call?</strong>
-                    <ul className="list-disc pl-5 text-[12px] leading-[1.6] text-(--muted)">
-                      <li>Start {agent?.name ?? "your agent"} again, in exactly <span className="nx-mono">{project?.path ?? "your project folder"}</span>.</li>
-                      {agentId === "claude" && <li>If Claude Code asks whether to trust the “nexus” server, choose yes.</li>}
-                      {desktop && <li>Keep Nexus Guard open: its local server only runs while the app does.</li>}
-                      <li>Send the message above and let the agent answer.</li>
-                    </ul>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Button size="sm" variant="outline" isDisabled={testing || !project} onPress={() => void runTest()}>{testing ? "Checking…" : checks.length ? "Check the setup again" : "Check the setup"}</Button>
-                      <span className="min-w-0 flex-1 text-[12px] text-(--muted)">Checks Nexus&apos;s side only. It cannot tell whether your agent connected.</span>
-                    </div>
-                    {testError && <p className="text-[12px] text-(--red)" role="alert">{testError}</p>}
-                    {checks.length > 0 && checkList(checks)}
-                    {simulated && <p className="rounded-[10px] bg-(--raised) px-3 py-2 text-[12px] leading-[1.55] text-(--muted)" role="status">Nexus&apos;s side looks fine, but your agent has not called yet. This page updates by itself when it does.</p>}
+                      : <>Without Nexus, an agent in {project?.name} could reach any resource your account allows. Here only what you add to this project is reachable.</>}
                   </div>
                 )}
                 {proven && (
                   <div className="flex flex-col gap-2 rounded-[12px] border border-(--line) p-3">
-                    <span className="nx-eyebrow">Optional · Bind a service</span>
+                    <span className="nx-eyebrow">Optional · Add a service</span>
                     <span className="text-[12px] leading-[1.5] text-(--muted)">Tell Nexus which exact resource this project uses. Anything else is refused.</span>
                     <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Service">
                       {SERVICES.map((s) => (
                         <button key={s} type="button" role="radio" aria-checked={service === s} onClick={() => setService(s)} className="nx-badge cursor-pointer !px-3 !py-1.5 text-[12px]" style={service === s ? { background: "var(--text)", color: "var(--canvas)" } : undefined}>{s}</button>
                       ))}
-                      <Button size="sm" onPress={bindService}><NxIcon name="plus" size={15} />Bind {service}</Button>
+                      <Button size="sm" onPress={addService}><NxIcon name="plus" size={15} />Add {service}</Button>
                     </div>
                     {project && project.connections.length > 0 && (
                       <ul>{project.connections.map((c) => <li key={c.id} className="flex items-center gap-2 py-1 text-[12.5px]"><NxIcon name="check" size={14} /><span className="text-(--text)">{c.provider}</span><span className="nx-mono text-(--muted)">{c.resource ?? c.target}</span></li>)}</ul>
@@ -402,8 +449,8 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
           <div className="mt-4 flex shrink-0 items-center justify-between gap-2 border-t border-(--line-soft) pt-3">
             {step === 0 ? <span className="min-w-0 flex-1 text-[11.5px] text-(--muted)">{!registeredId && !canRegister ? "Choose a folder and a name to continue." : ""}</span> : <Button size="sm" variant="ghost" onPress={() => setStep((s) => Math.max(0, s - 1))}>Back</Button>}
             {step === 0 && <Button size="sm" isDisabled={!registeredId && !canRegister} onPress={() => void register()}>{registeredId ? "Continue" : "Register project"}</Button>}
-            {step === 1 && <Button size="sm" variant={connected ? "primary" : "outline"} onPress={() => setStep(2)}>{connected ? "Continue" : "Skip this step"}</Button>}
-            {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish without an agent call"}</Button>}
+            {step === 1 && <Button size="sm" variant={connected || manual ? "primary" : "outline"} onPress={() => setStep(2)}>{connected || manual ? "Continue" : "Skip this step"}</Button>}
+            {step === 2 && <Button size="sm" variant={proven ? "primary" : "outline"} onPress={onFinish}>{proven ? "Open Home" : "Finish later"}</Button>}
           </div>
         </section>
 
@@ -415,6 +462,40 @@ export function FirstRun({ projects, resumeProject, onRegister, onOpenAddBinding
       </div>
     </div>
   );
+}
+
+/** A row Nexus checks itself. Never clickable: the icon is the status. */
+function LiveRow({ state, children }: { state: RowState; children: ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5 border-t border-(--line-soft) px-3 py-2.5 first:border-t-0">
+      {state === "pending"
+        ? <span role="img" aria-label="Checking" className="mt-0.5 inline-block size-[18px] shrink-0 animate-spin rounded-full border-2 border-(--line) border-t-(--text)" />
+        : <span className="nx-check mt-0.5 shrink-0" data-state={state === "ok" ? "done" : "failed"} style={{ width: 18, height: 18 }}><NxIcon name={state === "ok" ? "check" : "x"} size={11} /></span>}
+      <span className="flex min-w-0 flex-1 flex-col gap-1">{children}</span>
+    </li>
+  );
+}
+
+/** A row only the user can do. Ticked by hand, labelled so it is never read as live status. */
+function TickRow({ ticked, onToggle, children }: { ticked: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <li className="border-t border-(--line-soft) first:border-t-0">
+      <label className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5">
+        <input type="checkbox" className="mt-1 size-4 shrink-0 accent-(--text)" checked={ticked} onChange={onToggle} />
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          {children}
+          <span className="text-[11px] text-(--muted-2)">You do this</span>
+        </span>
+      </label>
+    </li>
+  );
+}
+
+/** Bolds “Choose yes” inside the agent's trust prompt, so the one click that matters stands out. */
+function emphasizeChoice(text: string): ReactNode {
+  const parts = text.split("Choose yes");
+  if (parts.length === 1) return text;
+  return <>{parts[0]}<strong className="font-semibold">Choose yes</strong>{parts.slice(1).join("Choose yes")}</>;
 }
 
 function Graph({ project, agentName, lit, other }: { project: Project | null; agentName: string | null; lit: boolean; other: Project | null }) {
